@@ -1,0 +1,38 @@
+name: Monitor Staging Health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  healthcheck:
+    name: Healthcheck
+    runs-on: ubuntu-latest
+    if: ${{ secrets.STAGING_HEALTH_URL != '' }}
+    env:
+      STAGING_HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
+      STAGING_READONLY_API_KEY: ${{ secrets.STAGING_READONLY_API_KEY }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+    steps:
+      - name: Query /api/health
+        id: check
+        run: |
+          set -euo pipefail
+          if [ -n "${STAGING_READONLY_API_KEY:-}" ]; then
+            RESPONSE=$(curl -fsS --max-time 25 -H "x-promanager-api-key: ${STAGING_READONLY_API_KEY}" "${STAGING_HEALTH_URL}")
+          else
+            RESPONSE=$(curl -fsS --max-time 25 "${STAGING_HEALTH_URL}")
+          fi
+          echo "$RESPONSE" > health.json
+          node -e "const fs=require('node:fs');const health=JSON.parse(fs.readFileSync('health.json','utf8'));if(!health||health.ok!==true){throw new Error('Health payload is not ok=true')}const alerts=Array.isArray(health.alerts)?health.alerts:[];const critical=alerts.filter((entry)=>String(entry?.severity??'').toLowerCase()==='critical');if(critical.length>0){throw new Error('Critical alerts present: '+critical.map((entry)=>entry.code||entry.message).join(', '))};console.log('Healthcheck passed.');"
+
+      - name: Notify on failure
+        if: failure() && env.ALERT_WEBHOOK_URL != ''
+        run: |
+          curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"title\":\"Staging healthcheck failed\",\"workflow\":\"${GITHUB_WORKFLOW}\",\"runUrl\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"

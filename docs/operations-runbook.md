@@ -19,6 +19,10 @@ Use separate env sets:
 
 Never commit real secrets. Use host secret manager.
 
+Frontend for separated staging/prod API:
+
+- set `VITE_API_BASE_URL` on frontend host to API base URL (e.g. `https://staging-api.promanager.example`)
+
 ## Security baseline
 
 - Enable `SECURITY_AUTH_ENABLED=1` in staging/prod
@@ -71,6 +75,7 @@ Daily backup config:
 - Dashboard Diagnosepanel: warnings + security + backup health
 - `GET /api/health` for external checks
 - Optional webhook alerts via `ALERT_WEBHOOK_URL`
+- GitHub Actions scheduler: `.github/workflows/monitor-staging-health.yml`
 
 Critical health states:
 
@@ -86,9 +91,22 @@ Current sync hardening includes:
 - Recreate on deleted/invalid target events
 - Deduplication of duplicate events
 - Daily optional resync
+- Weekly optional hard-resync (`GOOGLE_WEEKLY_HARD_RESYNC_*`)
 
 Operational guidance:
 
 - Use normal sync for routine updates
 - Use hard resync when diagnosis shows repeated event-link failures
 - Review sync counts and errors in diagnostics after each run
+
+## Calendar incident playbook
+
+1. Check Diagnosepanel (`Google sync`, `alerts`, `counts`, `last mode`)
+2. Run `Google Sync jetzt` once
+3. If still inconsistent: run hard resync (`forceResync`)
+4. Validate event links (`google_event_id`) and sync status values in sample cards
+5. If repeated failure:
+   - verify token/permissions (`/api/google/health`)
+   - verify calendar exists and write role
+   - inspect server audit (`/api/board/audit`)
+6. Escalate with run URL + error summary + affected card IDs

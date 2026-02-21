@@ -8,6 +8,7 @@ import { CommentTimeline } from './CommentTimeline';
 import { cx } from '../utils/cx';
 import { APP_CONFIG } from '../config/appConfig';
 import { createDateInputFromTodayOffset, getAppointmentBadge, getQuickDateLabel } from '../utils/scheduling';
+import { apiFetch } from '../utils/apiClient';
 
 function PropertyField({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -196,7 +197,7 @@ export function CardDetailDrawer() {
     setSlotError('');
 
     try {
-      const response = await fetch('/api/google/slots', {
+      const response = await apiFetch('/api/google/slots', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

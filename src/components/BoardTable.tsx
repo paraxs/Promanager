@@ -8,6 +8,7 @@ import type { CardRecordValue, PropertyDefinition, ServiceCard, Status } from '.
 import { STATUS_ORDER } from '../types/board';
 import { cardMatchesUiFilters } from '../utils/cardFilters';
 import { cx } from '../utils/cx';
+import { apiFetch } from '../utils/apiClient';
 
 type ColumnKind = 'text' | 'select' | 'date' | 'status' | 'sources' | 'comments' | 'updated' | 'actions';
 
@@ -643,7 +644,7 @@ export function BoardTable() {
     setRowMessage(cardId, 'Suche freie Slots...');
 
     try {
-      const response = await fetch('/api/google/slots', {
+      const response = await apiFetch('/api/google/slots', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -704,7 +705,7 @@ export function BoardTable() {
     setRowMessage(cardId, 'Google Sync laeuft...');
 
     try {
-      const response = await fetch('/api/google/sync', {
+      const response = await apiFetch('/api/google/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -27,13 +27,13 @@ import { OperationsRadar } from './OperationsRadar';
 import { useBoardStore } from '../store/boardStore';
 import { type BoardViewMode, type CardQuickFilter, useUiStore } from '../store/uiStore';
 import { STATUS_ORDER, type CardRecordValue, type PropertyDefinition } from '../types/board';
+import { apiFetch, readStoredApiKey, writeStoredApiKey } from '../utils/apiClient';
 import { cardMatchesUiFilters } from '../utils/cardFilters';
 import { getBusinessDaysLabel } from '../utils/scheduling';
 import { cx } from '../utils/cx';
 
 const UI_SETTINGS_EVENT = 'promanager-ui-settings-updated';
 const TELEGRAM_SYNC_CURSOR_KEY = 'promanager-telegram-sync-cursor';
-const API_KEY_STORAGE_KEY = 'promanager-api-key';
 
 const escapeHtml = (value: string): string =>
   value
@@ -108,34 +108,6 @@ const clearTelegramSyncCursor = (): void => {
   }
 };
 
-const readApiKeyFromStorage = (): string => {
-  try {
-    return localStorage.getItem(API_KEY_STORAGE_KEY)?.trim() ?? '';
-  } catch {
-    return '';
-  }
-};
-
-const writeApiKeyToStorage = (apiKey: string): void => {
-  try {
-    if (apiKey.trim()) {
-      localStorage.setItem(API_KEY_STORAGE_KEY, apiKey.trim());
-    } else {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage issues.
-  }
-};
-
-const buildApiAuthHeaders = (): Record<string, string> => {
-  const apiKey = readApiKeyFromStorage();
-  if (!apiKey) return {};
-  return {
-    'x-promanager-api-key': apiKey,
-  };
-};
-
 const createEmptyPresetTelemetry = (): PresetTelemetry => ({
   updatedAt: '',
   dispatch: {
@@ -158,7 +130,7 @@ const createEmptyPresetTelemetry = (): PresetTelemetry => ({
 });
 
 const syncDatabaseSchemaToServer = async (database: unknown): Promise<void> => {
-  const response = await fetch('/api/board/schema', {
+  const response = await apiFetch('/api/board/schema', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ database }),
@@ -227,6 +199,10 @@ type DiagnosticsSnapshot = {
   automation?: {
     autoGoogleSyncOnTelegramImport?: boolean;
     dailyGoogleResyncEnabled?: boolean;
+    weeklyHardGoogleResyncEnabled?: boolean;
+    weeklyHardGoogleResyncDayUtc?: number;
+    weeklyHardGoogleResyncHourUtc?: number;
+    lastWeeklyHardResyncDate?: string;
   };
   security?: {
     authEnabled?: boolean;
@@ -294,6 +270,9 @@ type RuntimeConfigSnapshot = {
   automation: {
     autoGoogleSyncOnTelegramImport?: boolean;
     dailyGoogleResyncEnabled?: boolean;
+    weeklyHardGoogleResyncEnabled?: boolean;
+    weeklyHardGoogleResyncDayUtc?: number;
+    weeklyHardGoogleResyncHourUtc?: number;
   };
   dispatch: {
     enabled?: boolean;
@@ -353,6 +332,9 @@ type RuntimeConfigForm = {
   agentFollowupIncludeRequired: boolean;
   autoGoogleSyncOnTelegramImport: boolean;
   dailyGoogleResyncEnabled: boolean;
+  weeklyHardGoogleResyncEnabled: boolean;
+  weeklyHardGoogleResyncDayUtc: string;
+  weeklyHardGoogleResyncHourUtc: string;
   dispatchEnabled: boolean;
   dispatchMinScore: string;
   dispatchMaxDailySlots: string;
@@ -465,6 +447,9 @@ const createDefaultRuntimeConfigForm = (): RuntimeConfigForm => ({
   agentFollowupIncludeRequired: false,
   autoGoogleSyncOnTelegramImport: false,
   dailyGoogleResyncEnabled: false,
+  weeklyHardGoogleResyncEnabled: false,
+  weeklyHardGoogleResyncDayUtc: '0',
+  weeklyHardGoogleResyncHourUtc: '3',
   dispatchEnabled: true,
   dispatchMinScore: '55',
   dispatchMaxDailySlots: '3',
@@ -598,6 +583,12 @@ const toRuntimeConfigForm = (config: RuntimeConfigSnapshot, fallback?: RuntimeCo
   autoGoogleSyncOnTelegramImport:
     config.automation?.autoGoogleSyncOnTelegramImport ?? fallback?.autoGoogleSyncOnTelegramImport ?? false,
   dailyGoogleResyncEnabled: config.automation?.dailyGoogleResyncEnabled ?? fallback?.dailyGoogleResyncEnabled ?? false,
+  weeklyHardGoogleResyncEnabled:
+    config.automation?.weeklyHardGoogleResyncEnabled ?? fallback?.weeklyHardGoogleResyncEnabled ?? false,
+  weeklyHardGoogleResyncDayUtc: String(config.automation?.weeklyHardGoogleResyncDayUtc ?? fallback?.weeklyHardGoogleResyncDayUtc ?? 0),
+  weeklyHardGoogleResyncHourUtc: String(
+    config.automation?.weeklyHardGoogleResyncHourUtc ?? fallback?.weeklyHardGoogleResyncHourUtc ?? 3,
+  ),
   dispatchEnabled: config.dispatch?.enabled ?? fallback?.dispatchEnabled ?? true,
   dispatchMinScore: String(config.dispatch?.minScore ?? fallback?.dispatchMinScore ?? 55),
   dispatchMaxDailySlots: String(config.dispatch?.maxDailySlots ?? fallback?.dispatchMaxDailySlots ?? 3),
@@ -652,9 +643,9 @@ const readErrorMessage = async (response: Response, fallback: string): Promise<s
 };
 
 const postJson = async <T,>(url: string, payload: unknown): Promise<T> => {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...buildApiAuthHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
 
@@ -671,9 +662,7 @@ const postJson = async <T,>(url: string, payload: unknown): Promise<T> => {
 };
 
 const getJson = async <T,>(url: string, fallbackError = 'Abruf fehlgeschlagen'): Promise<T> => {
-  const response = await fetch(url, {
-    headers: buildApiAuthHeaders(),
-  });
+  const response = await apiFetch(url);
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, fallbackError));
   }
@@ -869,7 +858,7 @@ export function BoardHeader() {
   const [runtimeConfigLoading, setRuntimeConfigLoading] = useState(false);
   const [runtimeConfigSaving, setRuntimeConfigSaving] = useState(false);
   const [runtimeConfigError, setRuntimeConfigError] = useState('');
-  const [apiSessionKeyInput, setApiSessionKeyInput] = useState<string>(() => readApiKeyFromStorage());
+  const [apiSessionKeyInput, setApiSessionKeyInput] = useState<string>(() => readStoredApiKey());
   const [googleSyncBusy, setGoogleSyncBusy] = useState(false);
   const [googleSetupBusy, setGoogleSetupBusy] = useState(false);
   const [presetTelemetry, setPresetTelemetry] = useState<PresetTelemetry>(() => createEmptyPresetTelemetry());
@@ -1141,7 +1130,7 @@ export function BoardHeader() {
       }
 
       const query = cursor ? `?since=${encodeURIComponent(cursor)}` : '';
-      const response = await fetch(`/api/board/state${query}`);
+      const response = await apiFetch(`/api/board/state${query}`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, 'Telegram-Sync fehlgeschlagen'));
       }
@@ -1254,8 +1243,8 @@ export function BoardHeader() {
   };
 
   const handleSaveApiSessionKey = () => {
-    writeApiKeyToStorage(apiSessionKeyInput);
-    setApiSessionKeyInput(readApiKeyFromStorage());
+    writeStoredApiKey(apiSessionKeyInput);
+    setApiSessionKeyInput(readStoredApiKey());
     alert(apiSessionKeyInput.trim() ? 'API Session Key gespeichert.' : 'API Session Key entfernt.');
   };
 
@@ -1301,6 +1290,9 @@ export function BoardHeader() {
         automation: {
           autoGoogleSyncOnTelegramImport: form.autoGoogleSyncOnTelegramImport,
           dailyGoogleResyncEnabled: form.dailyGoogleResyncEnabled,
+          weeklyHardGoogleResyncEnabled: form.weeklyHardGoogleResyncEnabled,
+          weeklyHardGoogleResyncDayUtc: Number(form.weeklyHardGoogleResyncDayUtc),
+          weeklyHardGoogleResyncHourUtc: Number(form.weeklyHardGoogleResyncHourUtc),
         },
         dispatch: {
           enabled: form.dispatchEnabled,
@@ -2261,6 +2253,17 @@ export function BoardHeader() {
                     Daily Hintergrund-Resync: {diagnostics.automation?.dailyGoogleResyncEnabled ? 'Ja' : 'Nein'}
                   </p>
                   <p>
+                    Weekly Hard-Resync: {diagnostics.automation?.weeklyHardGoogleResyncEnabled ? 'Ja' : 'Nein'} (Tag UTC:{' '}
+                    {diagnostics.automation?.weeklyHardGoogleResyncDayUtc ?? '-'}, Stunde UTC:{' '}
+                    {diagnostics.automation?.weeklyHardGoogleResyncHourUtc ?? '-'})
+                  </p>
+                  <p>
+                    Letzter Weekly Hard-Resync:{' '}
+                    {diagnostics.automation?.lastWeeklyHardResyncDate
+                      ? new Date(`${diagnostics.automation.lastWeeklyHardResyncDate}T00:00:00Z`).toLocaleString('de-AT')
+                      : '-'}
+                  </p>
+                  <p>
                     Letzter Sync: {diagnostics.google?.sync?.lastRunAt ? new Date(diagnostics.google.sync.lastRunAt).toLocaleString('de-AT') : '-'}
                   </p>
                   <p>
@@ -2477,6 +2480,12 @@ export function BoardHeader() {
                 Backup - Aktiv: {diagnostics?.backup?.enabled ? 'Ja' : 'Nein'} | Daily:{' '}
                 {diagnostics?.backup?.dailyEnabled ? 'Ja' : 'Nein'} | Letztes Backup:{' '}
                 {diagnostics?.backup?.lastBackupAt ? new Date(diagnostics.backup.lastBackupAt).toLocaleString('de-AT') : '-'}
+              </p>
+              <p>
+                Weekly Hard-Resync: {diagnostics?.automation?.weeklyHardGoogleResyncEnabled ? 'Ja' : 'Nein'} | Letzter Lauf:{' '}
+                {diagnostics?.automation?.lastWeeklyHardResyncDate
+                  ? new Date(`${diagnostics.automation.lastWeeklyHardResyncDate}T00:00:00Z`).toLocaleString('de-AT')
+                  : '-'}
               </p>
             </section>
 
@@ -2748,6 +2757,33 @@ export function BoardHeader() {
                       <option value="1">Ja</option>
                       <option value="0">Nein</option>
                     </select>
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Woechentlicher Hard-Resync</span>
+                    <select
+                      value={runtimeConfigForm.weeklyHardGoogleResyncEnabled ? '1' : '0'}
+                      onChange={(e) => updateRuntimeConfigField('weeklyHardGoogleResyncEnabled', e.target.value === '1')}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    >
+                      <option value="1">Ja</option>
+                      <option value="0">Nein</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Hard-Resync Tag UTC (0=So ... 6=Sa)</span>
+                    <input
+                      value={runtimeConfigForm.weeklyHardGoogleResyncDayUtc}
+                      onChange={(e) => updateRuntimeConfigField('weeklyHardGoogleResyncDayUtc', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Hard-Resync Stunde UTC (0-23)</span>
+                    <input
+                      value={runtimeConfigForm.weeklyHardGoogleResyncHourUtc}
+                      onChange={(e) => updateRuntimeConfigField('weeklyHardGoogleResyncHourUtc', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
                   </label>
                   <label className="text-sm text-gray-700">
                     <span className="mb-1 block">Dispatch aktiv</span>
