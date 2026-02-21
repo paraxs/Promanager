@@ -1,4 +1,4 @@
-﻿import type { Source, Status } from '../types/board';
+import type { Status } from '../types/board';
 
 export const STATUS_UI: Record<
   Status,
@@ -30,7 +30,13 @@ export const STATUS_UI: Record<
   },
 };
 
-export const SOURCE_UI: Record<Source, string> = {
-  WhatsApp: 'bg-purple-100 text-purple-800',
+export const SOURCE_UI: Record<string, string> = {
+  Telefon: 'bg-amber-100 text-amber-800',
+  SMS: 'bg-sky-100 text-sky-800',
+  WhatsApp: 'bg-green-100 text-green-800',
+  Messenger: 'bg-indigo-100 text-indigo-800',
   'E-Mail': 'bg-rose-100 text-rose-800',
+  Persoenlich: 'bg-teal-100 text-teal-800',
+  'Im Gespräch': 'bg-cyan-100 text-cyan-800',
+  Post: 'bg-orange-100 text-orange-800',
 };

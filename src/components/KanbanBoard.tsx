@@ -1,11 +1,5 @@
-﻿import { useMemo, useState } from 'react';
-import type {
-  DragCancelEvent,
-  DragEndEvent,
-  DragOverEvent,
-  DragStartEvent,
-  UniqueIdentifier,
-} from '@dnd-kit/core';
+import { useMemo, useState } from 'react';
+import type { DragEndEvent, DragOverEvent, DragStartEvent, UniqueIdentifier } from '@dnd-kit/core';
 import {
   DndContext,
   DragOverlay,
@@ -19,8 +13,10 @@ import {
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { STATUS_ORDER, type Status } from '../types/board';
 import { useBoardStore } from '../store/boardStore';
+import { useUiStore } from '../store/uiStore';
 import { findCardStatus } from '../utils/board';
 import { KanbanColumn } from './KanbanColumn';
+import { APP_CONFIG } from '../config/appConfig';
 
 const getStatusFromColumnId = (id: string): Status | null => {
   if (!id.startsWith('column:')) return null;
@@ -29,7 +25,7 @@ const getStatusFromColumnId = (id: string): Status | null => {
 };
 
 const DragPreview = ({ title }: { title: string }) => (
-  <div className="w-[300px] rounded-xl border border-gray-200 bg-white p-3 shadow-xl">
+  <div className="w-[260px] rounded-xl border border-gray-200 bg-white p-3 shadow-xl sm:w-[300px]">
     <p className="text-sm font-semibold text-gray-900">{title}</p>
   </div>
 );
@@ -39,6 +35,9 @@ export function KanbanBoard() {
   const cardsById = useBoardStore((s) => s.cardsById);
   const dragMove = useBoardStore((s) => s.dragMove);
   const finalizeMove = useBoardStore((s) => s.finalizeMove);
+  const searchQuery = useUiStore((s) => s.searchQuery);
+  const quickFilter = useUiStore((s) => s.quickFilter);
+  const dragDisabled = searchQuery.trim().length > 0 || quickFilter !== 'all';
 
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [startStatus, setStartStatus] = useState<Status | null>(null);
@@ -63,6 +62,7 @@ export function KanbanBoard() {
   }, [activeCardId, cardsById]);
 
   const onDragStart = (event: DragStartEvent) => {
+    if (dragDisabled) return;
     const cardId = String(event.active.id);
     const status = findStatus(event.active.id);
     if (!status) return;
@@ -74,6 +74,7 @@ export function KanbanBoard() {
   };
 
   const onDragOver = (event: DragOverEvent) => {
+    if (dragDisabled) return;
     const { active, over } = event;
     if (!over) return;
 
@@ -95,22 +96,33 @@ export function KanbanBoard() {
   };
 
   const onDragEnd = (event: DragEndEvent) => {
-  const cardId = String(event.active.id);
-  const droppedOver = event.over ? findStatus(event.over.id) : null;
+    if (dragDisabled) {
+      setActiveCardId(null);
+      setStartStatus(null);
+      setStartIndex(null);
+      return;
+    }
+    const cardId = String(event.active.id);
+    const droppedOver = event.over ? findStatus(event.over.id) : null;
 
-  if (!droppedOver && activeCardId && startStatus !== null && startIndex !== null) {
-    // Drop außerhalb -> zurück an Startposition
-    dragMove(activeCardId, startStatus, startIndex);
-  } else if (startStatus) {
-    finalizeMove(cardId, startStatus, 'Franz Kofler');
-  }
+    if (!droppedOver && activeCardId && startStatus !== null && startIndex !== null) {
+      dragMove(activeCardId, startStatus, startIndex);
+    } else if (startStatus) {
+      finalizeMove(cardId, startStatus, APP_CONFIG.defaults.actorName);
+    }
 
-  setActiveCardId(null);
-  setStartStatus(null);
-  setStartIndex(null);
-};
+    setActiveCardId(null);
+    setStartStatus(null);
+    setStartIndex(null);
+  };
 
-  const onDragCancel = (_event: DragCancelEvent) => {
+  const onDragCancel = () => {
+    if (dragDisabled) {
+      setActiveCardId(null);
+      setStartStatus(null);
+      setStartIndex(null);
+      return;
+    }
     if (activeCardId && startStatus !== null && startIndex !== null) {
       dragMove(activeCardId, startStatus, startIndex);
     }
@@ -121,7 +133,12 @@ export function KanbanBoard() {
   };
 
   return (
-    <div className="mt-4 overflow-x-auto pb-2">
+    <div className="mt-3 overflow-x-auto pb-3 sm:mt-4 sm:pb-2">
+      {dragDisabled ? (
+        <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          Drag & Drop ist waehrend aktiver Suche/Filter deaktiviert.
+        </p>
+      ) : null}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -130,7 +147,7 @@ export function KanbanBoard() {
         onDragEnd={onDragEnd}
         onDragCancel={onDragCancel}
       >
-        <div className="flex min-w-max gap-4">
+        <div className="flex min-w-max snap-x snap-mandatory gap-3 sm:gap-4">
           {STATUS_ORDER.map((status) => (
             <KanbanColumn key={status} status={status} />
           ))}

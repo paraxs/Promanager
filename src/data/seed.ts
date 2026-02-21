@@ -1,6 +1,8 @@
-﻿import type { BoardData, Source, Status, ServiceCard } from '../types/board';
+import type { BoardData, Source, Status, ServiceCard } from '../types/board';
 import { createEmptyColumns } from '../utils/board';
 import { nowIso } from '../utils/id';
+import { createRecordValuesFromCardFields } from '../utils/cardValues';
+import { createDefaultDatabaseSchema } from '../config/database';
 
 type RawSeedCard = {
   id: string;
@@ -11,7 +13,7 @@ type RawSeedCard = {
   location?: string;
   phone?: string;
   date?: string | null;
-  comments: Array<{ id: string; user: string; text: string; timeLabel?: string }>;
+  comments: Array<{ id: string; user: string; text: string }>;
 };
 
 const rawSeed: RawSeedCard[] = [
@@ -29,7 +31,6 @@ const rawSeed: RawSeedCard[] = [
         id: 'c1',
         user: 'Franz Kofler',
         text: 'Kastenrinne, Fensterbank laut Angebot montieren, wenn die Temperatur es zulässt.',
-        timeLabel: '3 Std.',
       },
     ],
   },
@@ -38,7 +39,7 @@ const rawSeed: RawSeedCard[] = [
     title: 'Stegen Brustblech in Blei',
     status: 'Warteschlange',
     source: 'E-Mail',
-    comments: [{ id: 'c2', user: 'System', text: 'Anfrage eingegangen', timeLabel: '1 Tag' }],
+    comments: [{ id: 'c2', user: 'System', text: 'Anfrage eingegangen' }],
   },
   {
     id: '3',
@@ -56,9 +57,10 @@ export const createInitialBoardData = (): BoardData => {
   for (const item of rawSeed) {
     const createdAt = nowIso();
 
-    cardsById[item.id] = {
+    const card: ServiceCard = {
       id: item.id,
       title: item.title,
+      collapsed: false,
       status: item.status,
       sources: [item.source],
       address: item.address ?? item.title,
@@ -72,7 +74,11 @@ export const createInitialBoardData = (): BoardData => {
       history: [],
       createdAt,
       updatedAt: createdAt,
+      values: {},
     };
+
+    card.values = createRecordValuesFromCardFields(card);
+    cardsById[item.id] = card;
 
     columns[item.status].push(item.id);
   }
@@ -80,6 +86,7 @@ export const createInitialBoardData = (): BoardData => {
   return {
     cardsById,
     columns,
+    database: createDefaultDatabaseSchema(),
     selectedCardId: null,
   };
 };

@@ -1,11 +1,10 @@
 ﻿import { STATUS_ORDER, type Columns, type Status } from '../types/board';
 
-export const createEmptyColumns = (): Columns => ({
-  'Eingang / Anfrage': [],
-  Warteschlange: [],
-  Terminiert: [],
-  Erledigt: [],
-});
+export const createEmptyColumns = (): Columns =>
+  STATUS_ORDER.reduce((acc, status) => {
+    acc[status] = [];
+    return acc;
+  }, {} as Columns);
 
 export const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));

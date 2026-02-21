@@ -1,74 +1,227 @@
-# React + TypeScript + Vite
+# ProManager
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Kanban-basiertes Service- und Termin-Management fuer Projekte.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Konfigurierbarer Dashboard-Titel und Untertitel
+- Kanban-Workflow mit Statuswechsel, Historie und Kommentaren
+- Umschaltbare Board-Ansicht: Kartenansicht oder Tabellenansicht
+- Tabellenansicht mit speicherbaren Spalten (ein-/ausblenden + Reihenfolge)
+- Erweiterbare Quellen an Karten (Telefon, SMS, WhatsApp, Messenger, E-Mail, Persoenlich, Post + eigene)
+- Zentrale Quellen-Verwaltung im Eigenschaften-Dialog (global hinzufuegen/entfernen)
+- Quelle global umbenennen (inkl. Migration in Karten und Quellen-Properties)
+- Karten einklappen (mobile-optimiert)
+- Archiv mit Wiederherstellen
+- JSON Export/Import inkl. UI-Einstellungen
+- PDF Export (A4, druckoptimiert)
+- Google Calendar One-Way Sync (Status `Terminiert` + Datum/Uhrzeit -> Event)
+- Google Calendar Produktionshaertung: Relink/Recreate bei geloeschten/geaenderten Events + Dublettenbereinigung
+- Optionaler Auto-Sync: Telegram-Import -> Google Calendar
+- Optionaler taeglicher Hintergrund-Resync fuer Kalender-Konsistenz
+- `google_event_id`/Sync-Status je Karte in `card.values`
+- KI-Slot-Vorschlaege aus Google Calendar (freie Zeitfenster)
+- Diagnosepanel fuer Server, Telegram Webhook, LLM und Google Calendar
+- Technik-Konfigurationspanel im Dashboard (LLM/Google/Agent/Guardrail) fuer Laufzeitbetrieb
+- Operations Radar mit Prioritaetswarnungen und Autopilot fuer sichere Quick-Fixes
+- Dispatch Center (Freigabe-Modus): priorisierte Einsatzvorschlaege mit Slot-Zuordnung und manueller Freigabe
+- Dispatch Presets im Config-Panel (Konservativ/Ausgeglichen/Aggressiv) mit 1-Klick-Uebernahme
+- Agent-Presets im Config-Panel (Fokus/Ausgeglichen/Voice-First) mit 1-Klick-Uebernahme
+- Preset-Telemetrie im Diagnosepanel (Preset-Nutzung + Dispatch-Freigabe/Verwerfungswirkung)
+- Zentrale Preset-Telemetrie serverseitig (geraeteuebergreifend) inkl. Reset/Export und Wochenranking
+- Smart-Suche und Schnellfilter (Ueberfaellig, Heute/Morgen, fehlende Basisdaten)
+- Bulk-Aktion: erledigte Karten gesammelt archivieren
+- Telegram-Dedupe auf Update- und Nachrichtenebene (robuster gegen Mehrfachimporte)
 
-## React Compiler
+## Voraussetzungen
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Node.js 20+
+- npm 10+
 
-## Expanding the ESLint configuration
+## Lokale Entwicklung
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+App startet standardmaessig unter `http://localhost:5173`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Neustart nach PC-Reboot (Quick-Runbook)
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+1. Projektordner oeffnen (`C:\Promanager1`)
+2. Frontend starten:
+
+```bash
+npm run dev
 ```
-"# Promanager" 
+
+3. API/Telegram-Server in zweitem Terminal starten:
+
+```bash
+npm run server:dev
+```
+
+4. Health pruefen:
+
+```bash
+curl http://localhost:8787/api/health
+```
+
+5. Wenn TryCloudflare-URL neu ist:
+   - neuen Tunnel starten
+   - Webhook neu setzen auf `https://<NEUE-URL>/api/telegram/webhook`
+   - im Dashboard `Menue -> Telegram Sync`
+
+## Telegram MVP (Webhook + Confirm-Flow)
+
+### 1) API-Server starten
+
+```bash
+npm run server:dev
+```
+
+Der Server laeuft standardmaessig auf `http://localhost:8787`.
+`npm run server:dev` laedt automatisch Variablen aus `.env`.
+
+### 2) Umgebungsvariablen
+
+Nutze `.env.example` als Vorlage:
+
+- `TELEGRAM_BOT_TOKEN` (von BotFather)
+- `TELEGRAM_WEBHOOK_SECRET` (frei waehlbarer Secret-Header)
+- `TELEGRAM_MVP_PORT` (optional, default `8787`)
+- `TELEGRAM_MVP_HOST` (optional, default `0.0.0.0`)
+- `LLM_ENABLED` (`1` oder `0`)
+- `LLM_MIN_CONFIDENCE` (z. B. `0.70`)
+- `LLM_STRATEGY` (`dominant` | `hybrid` | `fallback`, default `dominant`)
+- `LLM_REPAIR_PASS` (`1` oder `0`, default `1`)
+- `LLM_REPAIR_MIN_CONFIDENCE` (z. B. `0.82`)
+- `LLM_REPAIR_MAX_TRIES` (`1` bis `3`, default `2`)
+- `AGENT_ENABLED` (`1` oder `0`, default `1`)
+- `AGENT_CRITICAL_FIELDS` (CSV, nur diese Felder loesen Rueckfragen aus; z. B. `date,address,uhrzeit,source`)
+- `AGENT_PROPERTY_PRIORITY` (CSV `feld:score`, hoehere Werte zuerst; z. B. `date:100,uhrzeit:97,source:94,address:90,location:78`)
+- `AGENT_FOLLOWUP_INCLUDE_REQUIRED` (`1` oder `0`, default `0`; wenn `1`, werden zusätzlich alle `required`-Properties nachgefragt)
+- `AGENT_REQUIRED_FIELDS` (Legacy alias fuer `AGENT_CRITICAL_FIELDS`)
+- `IMPORT_GUARDRAIL_CONFIDENCE` (z. B. `0.65`, darunter kein direkter Import)
+- `OPENAI_API_KEY` (wenn LLM aktiviert)
+- `OPENAI_BASE_URL` (OpenAI-kompatible API, default `https://api.openai.com/v1`)
+- `OPENAI_MODEL` (z. B. `gpt-4.1-mini`)
+- `LLM_TIMEOUT_MS` (optional, default `12000`)
+- `GOOGLE_ENABLED` (`1` oder `0`)
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`
+- `GOOGLE_CALENDAR_ID` (optional, alternativ automatische Suche/Erstellung ueber `GOOGLE_CALENDAR_NAME`)
+- `GOOGLE_CALENDAR_NAME` (default `Projekte Firma 2026`)
+- `GOOGLE_TIMEZONE` (default `Europe/Vienna`)
+- `GOOGLE_EVENT_DURATION_MIN` (default `90`)
+- `GOOGLE_SLOT_WINDOW_DAYS` (default `14`)
+- `GOOGLE_SHARE_ROLE` (`writer` | `reader` | `owner` | `freeBusyReader`)
+- `GOOGLE_SHARED_WITH` (mehrere E-Mails mit `,` oder `;` getrennt)
+- `AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT` (`1` oder `0`)
+- `GOOGLE_DAILY_RESYNC_ENABLED` (`1` oder `0`)
+- `DISPATCH_ENABLED` (`1` oder `0`)
+- `DISPATCH_MIN_SCORE` (`0` bis `200`, default `55`)
+- `DISPATCH_MAX_DAILY_SLOTS` (`1` bis `20`, default `3`)
+- `DISPATCH_REQUIRED_FIELDS` (CSV, z. B. `date,address,source`)
+- `DISPATCH_SCORE_WEIGHTS` (CSV `regel:wert`, z. B. `eingang:80,warteschlange:65,...`)
+
+### 3) Webhook bei Telegram setzen
+
+Beispiel:
+
+```bash
+curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=<PUBLIC_URL>/api/telegram/webhook&secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+### 4) Ablauf
+
+1. Nachricht im Bot senden (Vorlage mit `Feld: Wert`)
+2. Rule-Parser extrahiert Felder nach `database.properties`
+3. Optional (wenn aktiviert): LLM verfeinert Extraktion mit Confidence-Score
+4. Bei `LLM_STRATEGY=dominant`: AI-Ergebnis ist primaer, Rule-Parser bleibt Fallback
+5. Optionaler Repair-Pass korrigiert niedrige Confidence oder fehlende Felder
+6. Optional Agent-Flow stellt Rueckfragen nur zu kritischen Feldern und in priorisierter Reihenfolge
+7. Bot antwortet mit Vorschau + Confidence
+8. Guardrail:
+   - confidence >= `IMPORT_GUARDRAIL_CONFIDENCE`: `Importieren` / `Verwerfen`
+   - confidence < `IMPORT_GUARDRAIL_CONFIDENCE`: `Nachbearbeiten` / `Verwerfen`
+9. Bei `Nachbearbeiten` sendet der Bot eine editierbare Vorlage, die erneut geschickt wird
+10. Bei `Importieren` wird eine Karte persistent gespeichert
+11. Audit-Event wird geschrieben
+12. Im Dashboard: `Menue -> Telegram Sync`
+13. Optional: `Menue -> Google Sync jetzt` fuer Board -> Google Calendar
+14. Bei Konflikten/kaputten Event-Links: `Menue -> Google Resync (hart)` fuer automatische Reparatur
+
+Hinweis:
+- Wenn `Adresse` vorhanden ist, wird `Ort` im Follow-up standardmaessig nicht mehr separat erzwungen.
+- `Quelle/Kanal` wird aus strukturierten Feldern (`Quelle: WhatsApp`) und Freitext (`per Telefon`, `Mail`) erkannt.
+
+Bot-Kommandos:
+
+- `/neu` -> sendet eine Ausfuell-Vorlage
+- `/beispiel` -> sendet Beispieltexte
+- `/abbrechen` -> beendet aktive Rueckfragen
+- `/hilfe` oder `/start` -> Hilfe
+
+### 5) Relevante API-Endpunkte
+
+- `POST /api/telegram/webhook`
+- `GET /api/board/state`
+- `POST /api/board/schema`
+- `GET /api/board/audit`
+- `GET /api/telegram/pending`
+- `GET /api/telegram/conversations`
+- `GET /api/health`
+- `GET /api/config`
+- `POST /api/config`
+- `GET /api/google/health`
+- `POST /api/google/setup`
+- `POST /api/google/sync`
+- `POST /api/google/slots`
+- `GET /api/telemetry/presets`
+- `GET /api/telemetry/presets/export`
+- `POST /api/telemetry/presets/event`
+- `POST /api/telemetry/presets/reset`
+
+### 6) Lokale Smoke-Tests
+
+```bash
+npm run test:telegram:smoke
+npm run test:telegram:guardrail
+npm run test:telegram:command
+npm run test:telegram:schema
+npm run test:telegram:agent
+npm run test:telegram:agent-priority
+npm run test:telegram:voice
+npm run test:telegram:singleline
+npm run test:telegram:source
+npm run test:telegram:source-property
+npm run test:telegram:address-optional-location
+```
+
+- `test:telegram:smoke`: Message -> Proposal -> `Importieren` -> Card + Audit
+- `test:telegram:guardrail`: niedrige Confidence -> `tg:ok` wird serverseitig blockiert
+
+### 7) Telegram State Reset (optional)
+
+```bash
+npm run server:reset-state
+```
+
+- erstellt ein Backup von `server/data/state.json`
+- setzt den Telegram-Serverzustand zurueck (Board/Pending/Audit)
+
+## Qualitaetssicherung
+
+```bash
+npm run lint
+npm run test
+npm run build
+```
+
+## Datenhaltung
+
+- Board-Daten werden lokal gespeichert (`localStorage`)
+- Dashboard-Beschriftung und Untertitel werden ebenfalls lokal gespeichert
+- JSON-Backups enthalten Board + UI-Einstellungen
+- Telegram-MVP persistiert serverseitig unter `server/data/state.json` (Board, Pending-Proposals, Audit)

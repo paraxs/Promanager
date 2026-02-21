@@ -1,4 +1,5 @@
-﻿import type { StateStorage } from 'zustand/middleware';
+import type { StateStorage } from 'zustand/middleware';
+import { APP_CONFIG } from '../config/appConfig';
 
 export interface PersistStorageAdapter {
   name: string;
@@ -16,24 +17,41 @@ const getSafeLocalStorage = (): Storage | null => {
   }
 };
 
-export const createDebouncedLocalStorage = (delayMs = 250): StateStorage => {
+const flushToStorage = (name: string, value: string) => {
+  const ls = getSafeLocalStorage();
+  if (ls) {
+    ls.setItem(name, value);
+    return;
+  }
+  memoryStorage.set(name, value);
+};
+
+export const createDebouncedLocalStorage = (delayMs = APP_CONFIG.persistence.writeDebounceMs): StateStorage => {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingValues = new Map<string, string>();
 
   return {
     getItem: (name) => {
+      if (pendingValues.has(name)) return pendingValues.get(name) ?? null;
+
       const ls = getSafeLocalStorage();
       if (ls) return ls.getItem(name);
       return memoryStorage.get(name) ?? null;
     },
 
     setItem: (name, value) => {
+      pendingValues.set(name, value);
+
       const pending = timers.get(name);
       if (pending) clearTimeout(pending);
 
       const timer = setTimeout(() => {
-        const ls = getSafeLocalStorage();
-        if (ls) ls.setItem(name, value);
-        else memoryStorage.set(name, value);
+        const queuedValue = pendingValues.get(name);
+        if (typeof queuedValue === 'string') {
+          flushToStorage(name, queuedValue);
+        }
+
+        pendingValues.delete(name);
         timers.delete(name);
       }, delayMs);
 
@@ -44,6 +62,9 @@ export const createDebouncedLocalStorage = (delayMs = 250): StateStorage => {
       const pending = timers.get(name);
       if (pending) clearTimeout(pending);
 
+      timers.delete(name);
+      pendingValues.delete(name);
+
       const ls = getSafeLocalStorage();
       if (ls) ls.removeItem(name);
       else memoryStorage.delete(name);
@@ -51,9 +72,15 @@ export const createDebouncedLocalStorage = (delayMs = 250): StateStorage => {
   };
 };
 
+const debouncedLocalStorage = createDebouncedLocalStorage(APP_CONFIG.persistence.writeDebounceMs);
+
+export const clearPersistedState = (key: string): void => {
+  debouncedLocalStorage.removeItem(key);
+};
+
 export const localStorageAdapter: PersistStorageAdapter = {
   name: 'localStorage',
-  getStateStorage: () => createDebouncedLocalStorage(250),
+  getStateStorage: () => debouncedLocalStorage,
 };
 
 /**
@@ -63,5 +90,5 @@ export const localStorageAdapter: PersistStorageAdapter = {
  */
 export const indexedDbAdapterPlaceholder: PersistStorageAdapter = {
   name: 'indexeddb-placeholder',
-  getStateStorage: () => createDebouncedLocalStorage(250),
+  getStateStorage: () => debouncedLocalStorage,
 };
