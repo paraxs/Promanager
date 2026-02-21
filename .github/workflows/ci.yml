@@ -16,10 +16,9 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Lint + Unit/Integration + Build
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,35 +32,53 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
+      - name: Run lint
         run: npm run lint
 
-      - name: Detect test script
-        id: detect_test
-        shell: bash
-        run: |
-          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
-            echo "has_test=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_test=false" >> "$GITHUB_OUTPUT"
-          fi
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Test (if configured)
-        if: steps.detect_test.outputs.has_test == 'true'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
         run: npm run test
 
-      - name: Skip test (missing script)
-        if: steps.detect_test.outputs.has_test != 'true'
-        run: echo "No test script configured in package.json. Skipping."
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Build
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run build
         run: npm run build
 
   e2e:
     name: E2E (Playwright Chromium)
     runs-on: ubuntu-latest
-    needs: quality
-
+    needs: build
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,27 +92,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Detect e2e script
-        id: detect_e2e
-        shell: bash
-        run: |
-          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts['test:e2e'] ? 0 : 1)"; then
-            echo "has_e2e=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_e2e=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Install Playwright browser
-        if: steps.detect_e2e.outputs.has_e2e == 'true'
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E tests (if configured)
-        if: steps.detect_e2e.outputs.has_e2e == 'true'
+      - name: Run E2E tests
         run: npm run test:e2e
-
-      - name: Skip E2E (missing script)
-        if: steps.detect_e2e.outputs.has_e2e != 'true'
-        run: echo "No test:e2e script configured in package.json. Skipping."
 
       - name: Upload Playwright report
         if: always()
