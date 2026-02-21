@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ const PORT = Number(process.env.TELEGRAM_MVP_PORT ?? 8787);
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? '';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? '';
 const HOST = process.env.TELEGRAM_MVP_HOST ?? '0.0.0.0';
+const ALERT_WEBHOOK_URL = String(process.env.ALERT_WEBHOOK_URL ?? '').trim();
 
 const parseEnabledFlag = (value, fallback = false) => {
   if (value === undefined || value === null) return fallback;
@@ -29,6 +30,25 @@ const parseSharedWithList = (value) => {
     .split(/[;,]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+};
+
+const parseCsvList = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry ?? '').trim())
+      .filter(Boolean);
+  }
+
+  return String(value ?? '')
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+};
+
+const parseRole = (value, fallback = 'readonly') => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['owner', 'dispatcher', 'readonly'].includes(normalized)) return normalized;
+  return fallback;
 };
 
 let LLM_ENABLED = parseEnabledFlag(process.env.LLM_ENABLED ?? '0');
@@ -79,12 +99,31 @@ let DISPATCH_SCORE_WEIGHTS_RAW = String(
   process.env.DISPATCH_SCORE_WEIGHTS ??
     'eingang:80,warteschlange:65,termin_ohne_datum:85,ueberfaellig:95,missing_date:18,missing_address:12,missing_phone:8,missing_source:6,no_comment:6,age_per_day:2,age_max:24',
 );
+let SECURITY_AUTH_ENABLED = parseEnabledFlag(process.env.SECURITY_AUTH_ENABLED ?? '0');
+let SECURITY_OWNER_KEYS = parseCsvList(process.env.SECURITY_OWNER_KEYS ?? '');
+let SECURITY_DISPATCHER_KEYS = parseCsvList(process.env.SECURITY_DISPATCHER_KEYS ?? '');
+let SECURITY_READONLY_KEYS = parseCsvList(process.env.SECURITY_READONLY_KEYS ?? '');
+let SECURITY_CORS_ORIGINS = parseCsvList(process.env.SECURITY_CORS_ORIGINS ?? '*');
+let SECURITY_RATE_LIMIT_ENABLED = parseEnabledFlag(process.env.SECURITY_RATE_LIMIT_ENABLED ?? '1', true);
+let SECURITY_RATE_LIMIT_WINDOW_MS = clampNumber(process.env.SECURITY_RATE_LIMIT_WINDOW_MS ?? 60_000, 5_000, 600_000, 60_000);
+let SECURITY_RATE_LIMIT_MAX = clampNumber(process.env.SECURITY_RATE_LIMIT_MAX ?? 300, 10, 50_000, 300);
+let SECURITY_RATE_LIMIT_WEBHOOK_MAX = clampNumber(
+  process.env.SECURITY_RATE_LIMIT_WEBHOOK_MAX ?? 200,
+  10,
+  50_000,
+  200,
+);
+let BACKUP_ENABLED = parseEnabledFlag(process.env.BACKUP_ENABLED ?? '1', true);
+let BACKUP_RETENTION_DAYS = clampNumber(process.env.BACKUP_RETENTION_DAYS ?? 21, 1, 365, 21);
+let BACKUP_DAILY_ENABLED = parseEnabledFlag(process.env.BACKUP_DAILY_ENABLED ?? '1', true);
+let BACKUP_DAILY_HOUR_UTC = clampNumber(process.env.BACKUP_DAILY_HOUR_UTC ?? 2, 0, 23, 2);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const RUNTIME_CONFIG_PATH = path.join(DATA_DIR, 'runtime-config.json');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
 const APP_DEFAULTS = {
   fallbackStatus: 'Eingang / Anfrage',
@@ -100,6 +139,13 @@ const GOOGLE_SYNC_VERIFY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const GOOGLE_DAILY_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const GOOGLE_DAILY_RESYNC_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const PRESET_TELEMETRY_EVENT_LIMIT = 5000;
+const MAX_BACKUP_FILES = 365;
+
+const ROLE_PRIORITY = {
+  readonly: 1,
+  dispatcher: 2,
+  owner: 3,
+};
 
 const createDefaultGoogleSyncState = () => ({
   lastRunAt: '',
@@ -220,6 +266,13 @@ const createDefaultState = () => ({
   conversations: {},
   googleSync: createDefaultGoogleSyncState(),
   presetTelemetry: createDefaultPresetTelemetryState(),
+  maintenance: {
+    lastBackupAt: '',
+    lastBackupFile: '',
+    lastRestoreAt: '',
+    lastRestoreFile: '',
+    lastDailyBackupDate: '',
+  },
   audit: [],
   lastUpdateId: -1,
   processedUpdateIds: [],
@@ -293,6 +346,26 @@ const buildRuntimeConfigPayload = ({ includeSecrets = false } = {}) => ({
   },
   guardrail: {
     importConfidence: IMPORT_GUARDRAIL_CONFIDENCE,
+  },
+  security: {
+    authEnabled: SECURITY_AUTH_ENABLED,
+    ownerKeys: includeSecrets ? SECURITY_OWNER_KEYS : [],
+    dispatcherKeys: includeSecrets ? SECURITY_DISPATCHER_KEYS : [],
+    readonlyKeys: includeSecrets ? SECURITY_READONLY_KEYS : [],
+    ownerKeyCount: SECURITY_OWNER_KEYS.length,
+    dispatcherKeyCount: SECURITY_DISPATCHER_KEYS.length,
+    readonlyKeyCount: SECURITY_READONLY_KEYS.length,
+    corsOrigins: SECURITY_CORS_ORIGINS,
+    rateLimitEnabled: SECURITY_RATE_LIMIT_ENABLED,
+    rateLimitWindowMs: SECURITY_RATE_LIMIT_WINDOW_MS,
+    rateLimitMax: SECURITY_RATE_LIMIT_MAX,
+    rateLimitWebhookMax: SECURITY_RATE_LIMIT_WEBHOOK_MAX,
+  },
+  backup: {
+    enabled: BACKUP_ENABLED,
+    retentionDays: BACKUP_RETENTION_DAYS,
+    dailyEnabled: BACKUP_DAILY_ENABLED,
+    dailyHourUtc: BACKUP_DAILY_HOUR_UTC,
   },
 });
 
@@ -369,6 +442,43 @@ const applyRuntimeConfig = (raw) => {
   if ('importConfidence' in guardrail) {
     IMPORT_GUARDRAIL_CONFIDENCE = clampNumber(guardrail.importConfidence, 0, 1, IMPORT_GUARDRAIL_CONFIDENCE);
   }
+
+  const security = raw.security && typeof raw.security === 'object' ? raw.security : {};
+  if ('authEnabled' in security) SECURITY_AUTH_ENABLED = parseEnabledFlag(security.authEnabled, SECURITY_AUTH_ENABLED);
+  if ('ownerKeys' in security) SECURITY_OWNER_KEYS = parseCsvList(security.ownerKeys);
+  if ('dispatcherKeys' in security) SECURITY_DISPATCHER_KEYS = parseCsvList(security.dispatcherKeys);
+  if ('readonlyKeys' in security) SECURITY_READONLY_KEYS = parseCsvList(security.readonlyKeys);
+  if ('corsOrigins' in security) SECURITY_CORS_ORIGINS = parseCsvList(security.corsOrigins);
+  if ('rateLimitEnabled' in security) {
+    SECURITY_RATE_LIMIT_ENABLED = parseEnabledFlag(security.rateLimitEnabled, SECURITY_RATE_LIMIT_ENABLED);
+  }
+  if ('rateLimitWindowMs' in security) {
+    SECURITY_RATE_LIMIT_WINDOW_MS = clampNumber(
+      security.rateLimitWindowMs,
+      5_000,
+      600_000,
+      SECURITY_RATE_LIMIT_WINDOW_MS,
+    );
+  }
+  if ('rateLimitMax' in security) {
+    SECURITY_RATE_LIMIT_MAX = clampNumber(security.rateLimitMax, 10, 50_000, SECURITY_RATE_LIMIT_MAX);
+  }
+  if ('rateLimitWebhookMax' in security) {
+    SECURITY_RATE_LIMIT_WEBHOOK_MAX = clampNumber(
+      security.rateLimitWebhookMax,
+      10,
+      50_000,
+      SECURITY_RATE_LIMIT_WEBHOOK_MAX,
+    );
+  }
+
+  const backup = raw.backup && typeof raw.backup === 'object' ? raw.backup : {};
+  if ('enabled' in backup) BACKUP_ENABLED = parseEnabledFlag(backup.enabled, BACKUP_ENABLED);
+  if ('retentionDays' in backup) {
+    BACKUP_RETENTION_DAYS = clampNumber(backup.retentionDays, 1, 365, BACKUP_RETENTION_DAYS);
+  }
+  if ('dailyEnabled' in backup) BACKUP_DAILY_ENABLED = parseEnabledFlag(backup.dailyEnabled, BACKUP_DAILY_ENABLED);
+  if ('dailyHourUtc' in backup) BACKUP_DAILY_HOUR_UTC = clampNumber(backup.dailyHourUtc, 0, 23, BACKUP_DAILY_HOUR_UTC);
 
   googleAccessTokenCache = {
     token: '',
@@ -614,6 +724,18 @@ const ensureStateShape = (raw) => {
         .filter(Boolean)
         .slice(-MAX_PROCESSED_MESSAGE_KEYS)
     : [];
+  const maintenance =
+    raw.maintenance && typeof raw.maintenance === 'object'
+      ? {
+          lastBackupAt: String(raw.maintenance.lastBackupAt ?? ''),
+          lastBackupFile: String(raw.maintenance.lastBackupFile ?? ''),
+          lastRestoreAt: String(raw.maintenance.lastRestoreAt ?? ''),
+          lastRestoreFile: String(raw.maintenance.lastRestoreFile ?? ''),
+          lastDailyBackupDate: String(raw.maintenance.lastDailyBackupDate ?? ''),
+        }
+      : {
+          ...fallback.maintenance,
+        };
 
   const next = {
     version: 1,
@@ -627,6 +749,7 @@ const ensureStateShape = (raw) => {
     conversations,
     googleSync,
     presetTelemetry,
+    maintenance,
     audit,
     lastUpdateId,
     processedUpdateIds,
@@ -658,11 +781,132 @@ const readBody = (req) =>
 const sendJson = (res, status, payload) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Access-Control-Allow-Origin', '*');
   res.end(JSON.stringify(payload));
 };
 
 const isObject = (value) => typeof value === 'object' && value !== null;
+
+const rateLimitBuckets = new Map();
+
+const getClientIp = (req) => {
+  const xff = String(req.headers['x-forwarded-for'] ?? '')
+    .split(',')[0]
+    .trim();
+  if (xff) return xff;
+  const realIp = String(req.headers['x-real-ip'] ?? '').trim();
+  if (realIp) return realIp;
+  return String(req.socket?.remoteAddress ?? 'unknown').trim() || 'unknown';
+};
+
+const getAllowedOrigin = (origin) => {
+  if (!origin) return SECURITY_CORS_ORIGINS.includes('*') ? '*' : '';
+  if (SECURITY_CORS_ORIGINS.includes('*')) return origin;
+  return SECURITY_CORS_ORIGINS.includes(origin) ? origin : '';
+};
+
+const applyCorsHeaders = (req, res) => {
+  const origin = String(req.headers.origin ?? '').trim();
+  const allowedOrigin = getAllowedOrigin(origin);
+
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  }
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-promanager-api-key, x-telegram-bot-api-secret-token');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+};
+
+const collectSecurityKeys = () => ({
+  owner: new Set(SECURITY_OWNER_KEYS.map((entry) => entry.trim()).filter(Boolean)),
+  dispatcher: new Set(SECURITY_DISPATCHER_KEYS.map((entry) => entry.trim()).filter(Boolean)),
+  readonly: new Set(SECURITY_READONLY_KEYS.map((entry) => entry.trim()).filter(Boolean)),
+});
+
+const resolveAccessRoleFromRequest = (req) => {
+  if (!SECURITY_AUTH_ENABLED) return 'owner';
+
+  const fromHeader = String(req.headers['x-promanager-api-key'] ?? '').trim();
+  const authHeader = String(req.headers.authorization ?? '').trim();
+  const fromBearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+  const candidate = fromHeader || fromBearer;
+  if (!candidate) return null;
+
+  const keys = collectSecurityKeys();
+  if (keys.owner.has(candidate)) return 'owner';
+  if (keys.dispatcher.has(candidate)) return 'dispatcher';
+  if (keys.readonly.has(candidate)) return 'readonly';
+  return null;
+};
+
+const roleAllows = (role, requiredRole) => {
+  const have = ROLE_PRIORITY[parseRole(role, 'readonly')] ?? 0;
+  const need = ROLE_PRIORITY[parseRole(requiredRole, 'readonly')] ?? 99;
+  return have >= need;
+};
+
+const requireRole = (req, res, requiredRole) => {
+  const role = resolveAccessRoleFromRequest(req);
+  if (!role) {
+    sendJson(res, 401, { ok: false, error: 'Authentication required.' });
+    return null;
+  }
+  if (!roleAllows(role, requiredRole)) {
+    sendJson(res, 403, { ok: false, error: `Insufficient role. Required: ${requiredRole}` });
+    return null;
+  }
+  return role;
+};
+
+const rateLimitKeyForRequest = (req, url) => `${getClientIp(req)}:${url.pathname.startsWith('/api/telegram/webhook') ? 'webhook' : 'api'}`;
+
+const checkRateLimit = (req, url) => {
+  if (!SECURITY_RATE_LIMIT_ENABLED) return { limited: false, retryAfterSec: 0 };
+  if (!url.pathname.startsWith('/api/')) return { limited: false, retryAfterSec: 0 };
+
+  const now = Date.now();
+  const key = rateLimitKeyForRequest(req, url);
+  const max = url.pathname.startsWith('/api/telegram/webhook') ? SECURITY_RATE_LIMIT_WEBHOOK_MAX : SECURITY_RATE_LIMIT_MAX;
+  const entry = rateLimitBuckets.get(key);
+  if (!entry || now >= entry.resetAt) {
+    rateLimitBuckets.set(key, {
+      count: 1,
+      resetAt: now + SECURITY_RATE_LIMIT_WINDOW_MS,
+    });
+    return { limited: false, retryAfterSec: 0 };
+  }
+
+  entry.count += 1;
+  if (entry.count <= max) return { limited: false, retryAfterSec: 0 };
+
+  const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  return { limited: true, retryAfterSec };
+};
+
+const cleanupRateLimitBuckets = () => {
+  const now = Date.now();
+  for (const [key, value] of rateLimitBuckets.entries()) {
+    if (!value || now >= Number(value.resetAt ?? 0)) {
+      rateLimitBuckets.delete(key);
+    }
+  }
+};
+
+const sendSecurityAlert = async (title, payload = {}) => {
+  if (!ALERT_WEBHOOK_URL) return;
+  try {
+    await fetch(ALERT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        at: toNowIso(),
+        ...payload,
+      }),
+    });
+  } catch (error) {
+    console.error('Alert webhook failed:', error);
+  }
+};
 
 const toIsoLocalDate = (date) =>
   `${date.getFullYear().toString().padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -2987,6 +3231,34 @@ const maybeRunDailyGoogleResync = async () => {
   }
 };
 
+const maybeRunDailyBackup = async () => {
+  if (!BACKUP_ENABLED || !BACKUP_DAILY_ENABLED) return;
+
+  const now = new Date();
+  const currentHour = now.getUTCHours();
+  if (currentHour !== BACKUP_DAILY_HOUR_UTC) return;
+
+  const dateKey = now.toISOString().slice(0, 10);
+  const lastDone = String(state.maintenance?.lastDailyBackupDate ?? '');
+  if (lastDone === dateKey) return;
+
+  try {
+    await createStateBackup({
+      reason: 'daily-auto',
+    });
+    state.maintenance = {
+      ...(state.maintenance ?? {}),
+      lastDailyBackupDate: dateKey,
+    };
+    await persistState();
+  } catch (error) {
+    console.error('Daily backup failed:', error);
+    await sendSecurityAlert('Daily backup failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 const toIsoFromLocalDateAndTime = (date, hh, mm) =>
   `${date.getFullYear().toString().padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
     date.getDate(),
@@ -3142,6 +3414,137 @@ const ensureDataDir = async () => {
   if (!existsSync(DATA_DIR)) {
     await mkdir(DATA_DIR, { recursive: true });
   }
+};
+
+const ensureBackupDir = async () => {
+  await ensureDataDir();
+  if (!existsSync(BACKUP_DIR)) {
+    await mkdir(BACKUP_DIR, { recursive: true });
+  }
+};
+
+const getSafeBackupFileName = (value) => {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return '';
+  if (normalized.includes('..') || normalized.includes('/') || normalized.includes('\\')) return '';
+  if (!normalized.endsWith('.json')) return '';
+  return normalized;
+};
+
+const buildBackupFileName = (reason = 'manual') => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const normalizedReason = slugify(reason) || 'manual';
+  return `state-${stamp}-${normalizedReason}.json`;
+};
+
+const listBackups = async () => {
+  await ensureBackupDir();
+  const entries = await readdir(BACKUP_DIR);
+  const details = [];
+  for (const file of entries) {
+    if (!file.endsWith('.json')) continue;
+    const filePath = path.join(BACKUP_DIR, file);
+    try {
+      const info = await stat(filePath);
+      details.push({
+        file,
+        bytes: info.size,
+        modifiedAt: info.mtime.toISOString(),
+      });
+    } catch {
+      // ignore broken entry
+    }
+  }
+
+  details.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
+  return details.slice(0, MAX_BACKUP_FILES);
+};
+
+const pruneBackups = async ({ retentionDays = BACKUP_RETENTION_DAYS } = {}) => {
+  await ensureBackupDir();
+  const maxAgeMs = Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - maxAgeMs;
+  const backups = await listBackups();
+  let removed = 0;
+
+  for (const backup of backups) {
+    const modifiedMs = Date.parse(backup.modifiedAt);
+    if (!Number.isFinite(modifiedMs) || modifiedMs >= cutoff) continue;
+    const filePath = path.join(BACKUP_DIR, backup.file);
+    try {
+      await rm(filePath, { force: true });
+      removed += 1;
+    } catch {
+      // ignore remove errors
+    }
+  }
+
+  return removed;
+};
+
+const createStateBackup = async ({ reason = 'manual', sourcePath = STATE_PATH } = {}) => {
+  if (!BACKUP_ENABLED) {
+    return {
+      skipped: true,
+      reason: 'disabled',
+      file: '',
+    };
+  }
+
+  await ensureBackupDir();
+  const file = buildBackupFileName(reason);
+  const targetPath = path.join(BACKUP_DIR, file);
+
+  if (existsSync(sourcePath)) {
+    await copyFile(sourcePath, targetPath);
+  } else {
+    await writeFile(targetPath, JSON.stringify(state, null, 2), 'utf8');
+  }
+
+  const now = toNowIso();
+  state.maintenance = {
+    ...(state.maintenance ?? {}),
+    lastBackupAt: now,
+    lastBackupFile: file,
+    lastDailyBackupDate: reason.startsWith('daily') ? now.slice(0, 10) : state.maintenance?.lastDailyBackupDate ?? '',
+  };
+  addAudit('backup_created', {
+    actor: 'system',
+    reason,
+    file,
+  });
+  await persistState();
+  await pruneBackups();
+  return {
+    skipped: false,
+    reason,
+    file,
+  };
+};
+
+const restoreStateFromBackupFile = async ({ fileName, actor = 'system' } = {}) => {
+  const safeFile = getSafeBackupFileName(fileName);
+  if (!safeFile) throw new Error('Invalid backup file name.');
+
+  await ensureBackupDir();
+  const sourcePath = path.join(BACKUP_DIR, safeFile);
+  if (!existsSync(sourcePath)) throw new Error('Backup file not found.');
+
+  const raw = await readFile(sourcePath, 'utf8');
+  const parsed = JSON.parse(raw);
+  const normalized = ensureStateShape(parsed);
+  state = normalized;
+  state.maintenance = {
+    ...(state.maintenance ?? {}),
+    lastRestoreAt: toNowIso(),
+    lastRestoreFile: safeFile,
+  };
+  addAudit('backup_restored', {
+    actor,
+    file: safeFile,
+  });
+  await persistState();
+  return state;
 };
 
 const loadRuntimeConfig = async () => {
@@ -3910,7 +4313,7 @@ const handleTelegramWebhook = async (req, res) => {
   }
 };
 
-const handleBoardSchemaUpdate = async (req, res) => {
+const handleBoardSchemaUpdate = async (req, res, actor = 'client') => {
   let payload;
   try {
     const raw = await readBody(req);
@@ -3936,14 +4339,14 @@ const handleBoardSchemaUpdate = async (req, res) => {
 
   state.board.database = normalized;
   addAudit('board_schema_updated', {
-    actor: 'client',
+    actor,
     propertyCount: normalized.properties.length,
   });
   await persistState();
   sendJson(res, 200, { ok: true, database: normalized });
 };
 
-const handleGoogleCalendarSetup = async (req, res) => {
+const handleGoogleCalendarSetup = async (req, res, actor = 'client') => {
   let payload = {};
   try {
     const raw = await readBody(req);
@@ -3961,13 +4364,20 @@ const handleGoogleCalendarSetup = async (req, res) => {
       ? String(payload?.role ?? GOOGLE_SHARE_ROLE)
       : GOOGLE_SHARE_ROLE;
     const result = await ensureGoogleCalendarSetup({ sharedWith, role });
+    addAudit('google_calendar_setup', {
+      actor,
+      calendarId: result.calendar?.id ?? GOOGLE_CALENDAR_ID,
+      sharedWith: result.sharedWith ?? [],
+      role,
+    });
+    await persistState();
     sendJson(res, 200, { ok: true, ...result });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 };
 
-const handleGoogleSync = async (req, res) => {
+const handleGoogleSync = async (req, res, actor = 'client') => {
   let payload = {};
   try {
     const raw = await readBody(req);
@@ -3993,7 +4403,7 @@ const handleGoogleSync = async (req, res) => {
       forceResync,
       persistBoardUpdates: false,
       modeLabel: forceResync ? 'resync' : 'sync',
-      actor: 'client',
+      actor,
     });
     sendJson(res, 200, { ok: true, ...syncResult });
   } catch (error) {
@@ -4001,7 +4411,7 @@ const handleGoogleSync = async (req, res) => {
   }
 };
 
-const handleGoogleSlots = async (req, res) => {
+const handleGoogleSlots = async (req, res, actor = 'client') => {
   let payload = {};
   try {
     const raw = await readBody(req);
@@ -4029,7 +4439,91 @@ const handleGoogleSlots = async (req, res) => {
       fromDate: typeof payload?.fromDate === 'string' ? payload.fromDate : null,
     });
 
+    addAudit('google_slots_requested', {
+      actor,
+      suggested: slotResult?.top ?? 0,
+      durationMin,
+    });
+    await persistState();
+
     sendJson(res, 200, { ok: true, ...slotResult });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+};
+
+const handleListBackups = async (_req, res) => {
+  try {
+    const backups = await listBackups();
+    sendJson(res, 200, {
+      ok: true,
+      backups,
+      maintenance: state.maintenance ?? {},
+      retentionDays: BACKUP_RETENTION_DAYS,
+      backupEnabled: BACKUP_ENABLED,
+    });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+};
+
+const handleRunBackup = async (req, res, role = 'owner') => {
+  let payload = {};
+  try {
+    const raw = await readBody(req);
+    payload = raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: `Invalid JSON: ${String(error)}` });
+    return;
+  }
+
+  const reason = isObject(payload) ? String(payload.reason ?? 'manual').trim() || 'manual' : 'manual';
+
+  try {
+    const result = await createStateBackup({
+      reason,
+    });
+    addAudit('backup_run_requested', {
+      actor: role,
+      reason,
+      file: result.file,
+    });
+    await persistState();
+    sendJson(res, 200, {
+      ok: true,
+      result,
+      maintenance: state.maintenance ?? {},
+    });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+};
+
+const handleRestoreBackup = async (req, res, role = 'owner') => {
+  let payload = {};
+  try {
+    const raw = await readBody(req);
+    payload = raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: `Invalid JSON: ${String(error)}` });
+    return;
+  }
+
+  const fileName = isObject(payload) ? String(payload.fileName ?? '').trim() : '';
+  if (!fileName) {
+    sendJson(res, 400, { ok: false, error: 'fileName is required.' });
+    return;
+  }
+
+  try {
+    await restoreStateFromBackupFile({
+      fileName,
+      actor: role,
+    });
+    sendJson(res, 200, {
+      ok: true,
+      maintenance: state.maintenance ?? {},
+    });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
@@ -4050,7 +4544,7 @@ const handleExportPresetTelemetry = (_req, res) => {
   });
 };
 
-const handleRecordPresetTelemetryEvent = async (req, res) => {
+const handleRecordPresetTelemetryEvent = async (req, res, actor = 'client') => {
   let payload = {};
   try {
     const raw = await readBody(req);
@@ -4072,7 +4566,7 @@ const handleRecordPresetTelemetryEvent = async (req, res) => {
   try {
     registerPresetTelemetryEvent({ channel, action, presetId });
     addAudit('preset_telemetry_event', {
-      actor: 'client',
+      actor,
       channel,
       action,
       presetId,
@@ -4087,10 +4581,10 @@ const handleRecordPresetTelemetryEvent = async (req, res) => {
   }
 };
 
-const handleResetPresetTelemetry = async (_req, res) => {
+const handleResetPresetTelemetry = async (_req, res, actor = 'client') => {
   state.presetTelemetry = createDefaultPresetTelemetryState();
   addAudit('preset_telemetry_reset', {
-    actor: 'client',
+    actor,
   });
   await persistState();
   sendJson(res, 200, {
@@ -4106,7 +4600,7 @@ const handleGetRuntimeConfig = (_req, res) => {
   });
 };
 
-const handleUpdateRuntimeConfig = async (req, res) => {
+const handleUpdateRuntimeConfig = async (req, res, actor = 'client') => {
   let payload = {};
   try {
     const raw = await readBody(req);
@@ -4124,10 +4618,12 @@ const handleUpdateRuntimeConfig = async (req, res) => {
   const candidate = isObject(payload.config) ? payload.config : payload;
   applyRuntimeConfig(candidate);
   addAudit('runtime_config_updated', {
-    actor: 'client',
+    actor,
     llmEnabled: LLM_ENABLED,
     googleEnabled: GOOGLE_ENABLED,
     agentEnabled: AGENT_ENABLED,
+    authEnabled: SECURITY_AUTH_ENABLED,
+    backupEnabled: BACKUP_ENABLED,
   });
   await persistState();
   await persistRuntimeConfig();
@@ -4140,6 +4636,54 @@ const handleUpdateRuntimeConfig = async (req, res) => {
   });
 };
 
+const buildHealthAlerts = ({ telegramWebhook, llmConfigured, googleHealth, googleSync }) => {
+  const alerts = [];
+  const add = (severity, code, message) => {
+    alerts.push({
+      severity,
+      code,
+      message,
+    });
+  };
+
+  if (!BOT_TOKEN) add('warn', 'telegram_bot_missing', 'Telegram Bot Token fehlt.');
+  if (!telegramWebhook.configured) add('warn', 'telegram_webhook_missing', 'Telegram Webhook ist nicht gesetzt.');
+  if (telegramWebhook.configured && !telegramWebhook.ok) add('warn', 'telegram_webhook_unhealthy', 'Telegram Webhook meldet Fehler.');
+
+  if (LLM_ENABLED && !llmConfigured) add('warn', 'llm_not_configured', 'LLM ist aktiv, aber nicht voll konfiguriert.');
+
+  if (GOOGLE_ENABLED && !googleHealth.configured) add('warn', 'google_not_configured', 'Google Sync ist aktiv, aber nicht konfiguriert.');
+  if (GOOGLE_ENABLED && googleHealth.configured && !googleHealth.canWrite) {
+    add('warn', 'google_no_write_access', 'Google Kalender ist verbunden, aber ohne Schreibzugriff.');
+  }
+
+  if (googleSync?.ok === false) {
+    add('critical', 'google_sync_failed', `Letzter Google-Sync ist fehlgeschlagen: ${googleSync?.error ?? '-'}`);
+  }
+
+  if (Number(Object.keys(state.pending ?? {}).length) > 25) {
+    add('warn', 'telegram_pending_high', 'Viele offene Telegram-Proposals.');
+  }
+
+  if (SECURITY_AUTH_ENABLED && SECURITY_OWNER_KEYS.length === 0) {
+    add('critical', 'security_owner_key_missing', 'Auth ist aktiv, aber keine Owner-Keys gesetzt.');
+  }
+
+  if (BACKUP_ENABLED && BACKUP_DAILY_ENABLED) {
+    const lastBackupAt = String(state.maintenance?.lastBackupAt ?? '');
+    if (!lastBackupAt) {
+      add('warn', 'backup_missing', 'Backups sind aktiv, aber es wurde noch kein Backup erstellt.');
+    } else {
+      const ageMs = Date.now() - Date.parse(lastBackupAt);
+      if (Number.isFinite(ageMs) && ageMs > 36 * 60 * 60 * 1000) {
+        add('warn', 'backup_stale', 'Letztes Backup ist aelter als 36 Stunden.');
+      }
+    }
+  }
+
+  return alerts;
+};
+
 const buildHealthPayload = async () => {
   const [telegramWebhook, googleHealth] = await Promise.all([getTelegramWebhookInfo(), getGoogleCalendarHealth()]);
   const llmConfigured = isLlmConfigured();
@@ -4147,6 +4691,14 @@ const buildHealthPayload = async () => {
   const processedMessageCount = Array.isArray(state.processedMessageKeys) ? state.processedMessageKeys.length : 0;
   const googleSync = state.googleSync && typeof state.googleSync === 'object' ? state.googleSync : createDefaultGoogleSyncState();
   const presetTelemetry = buildPresetTelemetryReport(state.presetTelemetry, { includeEvents: false });
+  const alerts = buildHealthAlerts({ telegramWebhook, llmConfigured, googleHealth, googleSync });
+  const rateLimitStats = {
+    enabled: SECURITY_RATE_LIMIT_ENABLED,
+    windowMs: SECURITY_RATE_LIMIT_WINDOW_MS,
+    max: SECURITY_RATE_LIMIT_MAX,
+    webhookMax: SECURITY_RATE_LIMIT_WEBHOOK_MAX,
+    activeBuckets: rateLimitBuckets.size,
+  };
 
   return {
     ok: true,
@@ -4208,6 +4760,23 @@ const buildHealthPayload = async () => {
       ...googleHealth,
       sync: googleSync,
     },
+    security: {
+      authEnabled: SECURITY_AUTH_ENABLED,
+      corsOrigins: SECURITY_CORS_ORIGINS,
+      rateLimit: rateLimitStats,
+    },
+    backup: {
+      enabled: BACKUP_ENABLED,
+      dailyEnabled: BACKUP_DAILY_ENABLED,
+      dailyHourUtc: BACKUP_DAILY_HOUR_UTC,
+      retentionDays: BACKUP_RETENTION_DAYS,
+      lastBackupAt: String(state.maintenance?.lastBackupAt ?? ''),
+      lastBackupFile: String(state.maintenance?.lastBackupFile ?? ''),
+      lastDailyBackupDate: String(state.maintenance?.lastDailyBackupDate ?? ''),
+      lastRestoreAt: String(state.maintenance?.lastRestoreAt ?? ''),
+      lastRestoreFile: String(state.maintenance?.lastRestoreFile ?? ''),
+    },
+    alerts,
     presetTelemetry,
   };
 };
@@ -4215,23 +4784,60 @@ const buildHealthPayload = async () => {
 const server = http.createServer(async (req, res) => {
   const method = req.method ?? 'GET';
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `localhost:${PORT}`}`);
+  const origin = String(req.headers.origin ?? '').trim();
+  const allowedOrigin = getAllowedOrigin(origin);
+
+  applyCorsHeaders(req, res);
+
+  if (origin && !allowedOrigin) {
+    sendJson(res, 403, { ok: false, error: 'CORS origin denied.' });
+    return;
+  }
 
   if (method === 'OPTIONS') {
     res.statusCode = 204;
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-telegram-bot-api-secret-token');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     res.end();
     return;
   }
 
+  const rateLimit = checkRateLimit(req, url);
+  if (rateLimit.limited) {
+    res.setHeader('Retry-After', String(rateLimit.retryAfterSec));
+    sendJson(res, 429, { ok: false, error: 'Rate limit exceeded.', retryAfterSec: rateLimit.retryAfterSec });
+    void sendSecurityAlert('Rate limit exceeded', {
+      ip: getClientIp(req),
+      path: url.pathname,
+      method,
+      retryAfterSec: rateLimit.retryAfterSec,
+    });
+    return;
+  }
+
+  const requireApiRole = (requiredRole) => {
+    const role = requireRole(req, res, requiredRole);
+    if (!role) {
+      void sendSecurityAlert('Unauthorized API access', {
+        ip: getClientIp(req),
+        path: url.pathname,
+        method,
+        requiredRole,
+      });
+      return null;
+    }
+    return role;
+  };
+
   if (method === 'GET' && url.pathname === '/api/config') {
+    const role = requireApiRole('owner');
+    if (!role) return;
     handleGetRuntimeConfig(req, res);
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/config') {
-    await handleUpdateRuntimeConfig(req, res);
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleUpdateRuntimeConfig(req, res, `api:${role}`);
     return;
   }
 
@@ -4242,69 +4848,116 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === 'GET' && url.pathname === '/api/google/health') {
+    const role = requireApiRole('readonly');
+    if (!role) return;
     const health = await getGoogleCalendarHealth();
     sendJson(res, 200, { ok: true, ...health });
     return;
   }
 
   if (method === 'GET' && url.pathname === '/api/telemetry/presets') {
+    const role = requireApiRole('readonly');
+    if (!role) return;
     handleGetPresetTelemetry(req, res);
     return;
   }
 
   if (method === 'GET' && url.pathname === '/api/telemetry/presets/export') {
+    const role = requireApiRole('owner');
+    if (!role) return;
     handleExportPresetTelemetry(req, res);
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/telemetry/presets/event') {
-    await handleRecordPresetTelemetryEvent(req, res);
+    const role = requireApiRole('dispatcher');
+    if (!role) return;
+    await handleRecordPresetTelemetryEvent(req, res, `api:${role}`);
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/telemetry/presets/reset') {
-    await handleResetPresetTelemetry(req, res);
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleResetPresetTelemetry(req, res, `api:${role}`);
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/google/setup') {
-    await handleGoogleCalendarSetup(req, res);
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleGoogleCalendarSetup(req, res, `api:${role}`);
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/google/sync') {
-    await handleGoogleSync(req, res);
+    const role = requireApiRole('dispatcher');
+    if (!role) return;
+    await handleGoogleSync(req, res, `api:${role}`);
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/google/slots') {
-    await handleGoogleSlots(req, res);
+    const role = requireApiRole('dispatcher');
+    if (!role) return;
+    await handleGoogleSlots(req, res, `api:${role}`);
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/api/backups') {
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleListBackups(req, res);
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/api/backups/run') {
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleRunBackup(req, res, `api:${role}`);
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/api/backups/restore') {
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleRestoreBackup(req, res, `api:${role}`);
     return;
   }
 
   if (method === 'GET' && url.pathname === '/api/board/state') {
+    const role = requireApiRole('readonly');
+    if (!role) return;
     const since = url.searchParams.get('since');
     sendJson(res, 200, toWorkspacePayload(filterBoardSince(state.board, since)));
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/board/schema') {
-    await handleBoardSchemaUpdate(req, res);
+    const role = requireApiRole('owner');
+    if (!role) return;
+    await handleBoardSchemaUpdate(req, res, `api:${role}`);
     return;
   }
 
   if (method === 'GET' && url.pathname === '/api/board/audit') {
+    const role = requireApiRole('dispatcher');
+    if (!role) return;
     const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 50)));
     sendJson(res, 200, { ok: true, items: state.audit.slice(0, limit) });
     return;
   }
 
   if (method === 'GET' && url.pathname === '/api/telegram/pending') {
+    const role = requireApiRole('dispatcher');
+    if (!role) return;
     sendJson(res, 200, { ok: true, items: Object.values(state.pending) });
     return;
   }
 
   if (method === 'GET' && url.pathname === '/api/telegram/conversations') {
+    const role = requireApiRole('dispatcher');
+    if (!role) return;
     sendJson(res, 200, { ok: true, items: Object.values(state.conversations ?? {}) });
     return;
   }
@@ -4334,8 +4987,19 @@ server.listen(PORT, HOST, () => {
   console.log(
     `Automation: autoGoogleSyncOnTelegramImport=${AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT} | dailyGoogleResyncEnabled=${GOOGLE_DAILY_RESYNC_ENABLED}`,
   );
+  if (SECURITY_AUTH_ENABLED) {
+    console.log(
+      `Security: authEnabled=true | ownerKeys=${SECURITY_OWNER_KEYS.length} | dispatcherKeys=${SECURITY_DISPATCHER_KEYS.length} | readonlyKeys=${SECURITY_READONLY_KEYS.length}`,
+    );
+  }
+  console.log(
+    `Backups: enabled=${BACKUP_ENABLED} | dailyEnabled=${BACKUP_DAILY_ENABLED} | dailyHourUtc=${BACKUP_DAILY_HOUR_UTC} | retentionDays=${BACKUP_RETENTION_DAYS}`,
+  );
   setInterval(() => {
+    cleanupRateLimitBuckets();
+    void maybeRunDailyBackup();
     void maybeRunDailyGoogleResync();
   }, GOOGLE_DAILY_RESYNC_CHECK_INTERVAL_MS);
+  void maybeRunDailyBackup();
   void maybeRunDailyGoogleResync();
 });

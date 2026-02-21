@@ -33,6 +33,7 @@ import { cx } from '../utils/cx';
 
 const UI_SETTINGS_EVENT = 'promanager-ui-settings-updated';
 const TELEGRAM_SYNC_CURSOR_KEY = 'promanager-telegram-sync-cursor';
+const API_KEY_STORAGE_KEY = 'promanager-api-key';
 
 const escapeHtml = (value: string): string =>
   value
@@ -105,6 +106,34 @@ const clearTelegramSyncCursor = (): void => {
   } catch {
     // Ignore storage issues.
   }
+};
+
+const readApiKeyFromStorage = (): string => {
+  try {
+    return localStorage.getItem(API_KEY_STORAGE_KEY)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+};
+
+const writeApiKeyToStorage = (apiKey: string): void => {
+  try {
+    if (apiKey.trim()) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, apiKey.trim());
+    } else {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage issues.
+  }
+};
+
+const buildApiAuthHeaders = (): Record<string, string> => {
+  const apiKey = readApiKeyFromStorage();
+  if (!apiKey) return {};
+  return {
+    'x-promanager-api-key': apiKey,
+  };
 };
 
 const createEmptyPresetTelemetry = (): PresetTelemetry => ({
@@ -199,6 +228,33 @@ type DiagnosticsSnapshot = {
     autoGoogleSyncOnTelegramImport?: boolean;
     dailyGoogleResyncEnabled?: boolean;
   };
+  security?: {
+    authEnabled?: boolean;
+    corsOrigins?: string[];
+    rateLimit?: {
+      enabled?: boolean;
+      windowMs?: number;
+      max?: number;
+      webhookMax?: number;
+      activeBuckets?: number;
+    };
+  };
+  backup?: {
+    enabled?: boolean;
+    dailyEnabled?: boolean;
+    dailyHourUtc?: number;
+    retentionDays?: number;
+    lastBackupAt?: string;
+    lastBackupFile?: string;
+    lastDailyBackupDate?: string;
+    lastRestoreAt?: string;
+    lastRestoreFile?: string;
+  };
+  alerts?: Array<{
+    severity?: 'critical' | 'warn' | 'info';
+    code?: string;
+    message?: string;
+  }>;
   presetTelemetry?: PresetTelemetry;
 };
 
@@ -249,6 +305,23 @@ type RuntimeConfigSnapshot = {
   guardrail: {
     importConfidence: number;
   };
+  security?: {
+    authEnabled?: boolean;
+    ownerKeyCount?: number;
+    dispatcherKeyCount?: number;
+    readonlyKeyCount?: number;
+    corsOrigins?: string[];
+    rateLimitEnabled?: boolean;
+    rateLimitWindowMs?: number;
+    rateLimitMax?: number;
+    rateLimitWebhookMax?: number;
+  };
+  backup?: {
+    enabled?: boolean;
+    retentionDays?: number;
+    dailyEnabled?: boolean;
+    dailyHourUtc?: number;
+  };
 };
 
 type RuntimeConfigForm = {
@@ -286,6 +359,19 @@ type RuntimeConfigForm = {
   dispatchRequiredFields: string;
   dispatchScoreWeights: string;
   guardrailImportConfidence: string;
+  securityAuthEnabled: boolean;
+  securityOwnerKeys: string;
+  securityDispatcherKeys: string;
+  securityReadonlyKeys: string;
+  securityCorsOrigins: string;
+  securityRateLimitEnabled: boolean;
+  securityRateLimitWindowMs: string;
+  securityRateLimitMax: string;
+  securityRateLimitWebhookMax: string;
+  backupEnabled: boolean;
+  backupRetentionDays: string;
+  backupDailyEnabled: boolean;
+  backupDailyHourUtc: string;
 };
 
 type RuntimeConfigApiPayload = {
@@ -296,6 +382,8 @@ type RuntimeConfigApiPayload = {
     automation: Record<string, unknown>;
     dispatch: Record<string, unknown>;
     guardrail: Record<string, unknown>;
+    security: Record<string, unknown>;
+    backup: Record<string, unknown>;
   };
 };
 
@@ -384,6 +472,19 @@ const createDefaultRuntimeConfigForm = (): RuntimeConfigForm => ({
   dispatchScoreWeights:
     'eingang:80,warteschlange:65,termin_ohne_datum:85,ueberfaellig:95,missing_date:18,missing_address:12,missing_phone:8,missing_source:6,no_comment:6,age_per_day:2,age_max:24',
   guardrailImportConfidence: '0.65',
+  securityAuthEnabled: false,
+  securityOwnerKeys: '',
+  securityDispatcherKeys: '',
+  securityReadonlyKeys: '',
+  securityCorsOrigins: '*',
+  securityRateLimitEnabled: true,
+  securityRateLimitWindowMs: '60000',
+  securityRateLimitMax: '300',
+  securityRateLimitWebhookMax: '200',
+  backupEnabled: true,
+  backupRetentionDays: '21',
+  backupDailyEnabled: true,
+  backupDailyHourUtc: '2',
 });
 
 const DISPATCH_PRESETS: DispatchPreset[] = [
@@ -506,6 +607,23 @@ const toRuntimeConfigForm = (config: RuntimeConfigSnapshot, fallback?: RuntimeCo
     fallback?.dispatchScoreWeights ??
     'eingang:80,warteschlange:65,termin_ohne_datum:85,ueberfaellig:95,missing_date:18,missing_address:12,missing_phone:8,missing_source:6,no_comment:6,age_per_day:2,age_max:24',
   guardrailImportConfidence: String(config.guardrail?.importConfidence ?? 0.65),
+  securityAuthEnabled: Boolean(config.security?.authEnabled ?? fallback?.securityAuthEnabled ?? false),
+  securityOwnerKeys: fallback?.securityOwnerKeys ?? '',
+  securityDispatcherKeys: fallback?.securityDispatcherKeys ?? '',
+  securityReadonlyKeys: fallback?.securityReadonlyKeys ?? '',
+  securityCorsOrigins: Array.isArray(config.security?.corsOrigins)
+    ? config.security?.corsOrigins.join(', ')
+    : fallback?.securityCorsOrigins ?? '*',
+  securityRateLimitEnabled: config.security?.rateLimitEnabled ?? fallback?.securityRateLimitEnabled ?? true,
+  securityRateLimitWindowMs: String(config.security?.rateLimitWindowMs ?? fallback?.securityRateLimitWindowMs ?? 60000),
+  securityRateLimitMax: String(config.security?.rateLimitMax ?? fallback?.securityRateLimitMax ?? 300),
+  securityRateLimitWebhookMax: String(
+    config.security?.rateLimitWebhookMax ?? fallback?.securityRateLimitWebhookMax ?? 200,
+  ),
+  backupEnabled: config.backup?.enabled ?? fallback?.backupEnabled ?? true,
+  backupRetentionDays: String(config.backup?.retentionDays ?? fallback?.backupRetentionDays ?? 21),
+  backupDailyEnabled: config.backup?.dailyEnabled ?? fallback?.backupDailyEnabled ?? true,
+  backupDailyHourUtc: String(config.backup?.dailyHourUtc ?? fallback?.backupDailyHourUtc ?? 2),
 });
 
 const parseJsonSafely = (text: string): unknown => {
@@ -536,7 +654,7 @@ const readErrorMessage = async (response: Response, fallback: string): Promise<s
 const postJson = async <T,>(url: string, payload: unknown): Promise<T> => {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...buildApiAuthHeaders() },
     body: JSON.stringify(payload),
   });
 
@@ -553,7 +671,9 @@ const postJson = async <T,>(url: string, payload: unknown): Promise<T> => {
 };
 
 const getJson = async <T,>(url: string, fallbackError = 'Abruf fehlgeschlagen'): Promise<T> => {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: buildApiAuthHeaders(),
+  });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, fallbackError));
   }
@@ -749,6 +869,7 @@ export function BoardHeader() {
   const [runtimeConfigLoading, setRuntimeConfigLoading] = useState(false);
   const [runtimeConfigSaving, setRuntimeConfigSaving] = useState(false);
   const [runtimeConfigError, setRuntimeConfigError] = useState('');
+  const [apiSessionKeyInput, setApiSessionKeyInput] = useState<string>(() => readApiKeyFromStorage());
   const [googleSyncBusy, setGoogleSyncBusy] = useState(false);
   const [googleSetupBusy, setGoogleSetupBusy] = useState(false);
   const [presetTelemetry, setPresetTelemetry] = useState<PresetTelemetry>(() => createEmptyPresetTelemetry());
@@ -1132,7 +1253,18 @@ export function BoardHeader() {
     setRuntimeConfigForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const handleSaveApiSessionKey = () => {
+    writeApiKeyToStorage(apiSessionKeyInput);
+    setApiSessionKeyInput(readApiKeyFromStorage());
+    alert(apiSessionKeyInput.trim() ? 'API Session Key gespeichert.' : 'API Session Key entfernt.');
+  };
+
   const buildRuntimeConfigPayload = (form: RuntimeConfigForm): RuntimeConfigApiPayload => {
+    const securityCorsOrigins = form.securityCorsOrigins
+      .split(/[;,]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
     const payload: RuntimeConfigApiPayload = {
       config: {
         llm: {
@@ -1180,6 +1312,20 @@ export function BoardHeader() {
         guardrail: {
           importConfidence: Number(form.guardrailImportConfidence),
         },
+        security: {
+          authEnabled: form.securityAuthEnabled,
+          corsOrigins: securityCorsOrigins.length ? securityCorsOrigins : ['*'],
+          rateLimitEnabled: form.securityRateLimitEnabled,
+          rateLimitWindowMs: Number(form.securityRateLimitWindowMs),
+          rateLimitMax: Number(form.securityRateLimitMax),
+          rateLimitWebhookMax: Number(form.securityRateLimitWebhookMax),
+        },
+        backup: {
+          enabled: form.backupEnabled,
+          retentionDays: Number(form.backupRetentionDays),
+          dailyEnabled: form.backupDailyEnabled,
+          dailyHourUtc: Number(form.backupDailyHourUtc),
+        },
       },
     };
 
@@ -1194,6 +1340,24 @@ export function BoardHeader() {
     }
     if (form.googleRefreshToken.trim()) {
       payload.config.google.refreshToken = form.googleRefreshToken.trim();
+    }
+    if (form.securityOwnerKeys.trim()) {
+      payload.config.security.ownerKeys = form.securityOwnerKeys
+        .split(/[;,]/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
+    if (form.securityDispatcherKeys.trim()) {
+      payload.config.security.dispatcherKeys = form.securityDispatcherKeys
+        .split(/[;,]/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
+    if (form.securityReadonlyKeys.trim()) {
+      payload.config.security.readonlyKeys = form.securityReadonlyKeys
+        .split(/[;,]/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
     }
 
     return payload;
@@ -1223,6 +1387,9 @@ export function BoardHeader() {
         googleClientId: '',
         googleClientSecret: '',
         googleRefreshToken: '',
+        securityOwnerKeys: '',
+        securityDispatcherKeys: '',
+        securityReadonlyKeys: '',
       });
 
       if (!result.config.automation) {
@@ -1304,6 +1471,19 @@ export function BoardHeader() {
       URL.revokeObjectURL(url);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Preset-Telemetrie Export fehlgeschlagen.';
+      alert(message);
+    }
+  };
+
+  const handleRunServerBackup = async () => {
+    try {
+      await postJson<{ ok: boolean; maintenance?: DiagnosticsSnapshot['backup'] }>('/api/backups/run', {
+        reason: 'manual-ui',
+      });
+      await refreshDiagnostics(true);
+      alert('Server-Backup erfolgreich erstellt.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Server-Backup fehlgeschlagen.';
       alert(message);
     }
   };
@@ -2019,6 +2199,24 @@ export function BoardHeader() {
                   <p>Offene Follow-ups: {diagnostics.openConversations ?? 0}</p>
                 </section>
 
+                {Array.isArray(diagnostics.alerts) && diagnostics.alerts.length > 0 ? (
+                  <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="font-semibold text-gray-900">Warnungen</p>
+                    <div className="mt-1 space-y-1 text-xs">
+                      {diagnostics.alerts.map((alert, index) => (
+                        <p
+                          key={`${alert.code ?? 'alert'}-${index}`}
+                          className={cx(
+                            alert.severity === 'critical' ? 'text-rose-700' : alert.severity === 'warn' ? 'text-amber-800' : 'text-gray-700',
+                          )}
+                        >
+                          [{(alert.severity ?? 'info').toUpperCase()}] {alert.message ?? '-'}
+                        </p>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
                 <section className="rounded-lg border border-gray-200 p-3">
                   <p className="font-semibold text-gray-900">Telegram</p>
                   <p>Bot konfiguriert: {diagnostics.telegram?.botConfigured ? 'Ja' : 'Nein'}</p>
@@ -2080,6 +2278,54 @@ export function BoardHeader() {
                   {diagnostics.google?.sync?.summary ? <p className="text-xs text-gray-500">{diagnostics.google.sync.summary}</p> : null}
                   {diagnostics.google?.sync?.error ? <p className="text-rose-700">Letzter Sync-Fehler: {diagnostics.google.sync.error}</p> : null}
                   {diagnostics.google?.error ? <p className="text-rose-700">Kalender-Fehler: {diagnostics.google.error}</p> : null}
+                </section>
+
+                <section className="rounded-lg border border-gray-200 p-3">
+                  <p className="font-semibold text-gray-900">Security</p>
+                  <p>Auth aktiv: {diagnostics.security?.authEnabled ? 'Ja' : 'Nein'}</p>
+                  <p>
+                    CORS Origins:{' '}
+                    {Array.isArray(diagnostics.security?.corsOrigins) && diagnostics.security?.corsOrigins.length
+                      ? diagnostics.security?.corsOrigins.join(', ')
+                      : '-'}
+                  </p>
+                  <p>
+                    Rate Limit: {diagnostics.security?.rateLimit?.enabled ? 'Ja' : 'Nein'} | Fenster:{' '}
+                    {diagnostics.security?.rateLimit?.windowMs ?? '-'} ms | Max:{' '}
+                    {diagnostics.security?.rateLimit?.max ?? '-'} | Webhook Max:{' '}
+                    {diagnostics.security?.rateLimit?.webhookMax ?? '-'}
+                  </p>
+                  <p>Aktive Buckets: {diagnostics.security?.rateLimit?.activeBuckets ?? 0}</p>
+                </section>
+
+                <section className="rounded-lg border border-gray-200 p-3">
+                  <p className="font-semibold text-gray-900">Backups</p>
+                  <p>Aktiv: {diagnostics.backup?.enabled ? 'Ja' : 'Nein'}</p>
+                  <p>Tages-Backup aktiv: {diagnostics.backup?.dailyEnabled ? 'Ja' : 'Nein'}</p>
+                  <p>
+                    Zeit (UTC): {diagnostics.backup?.dailyHourUtc ?? '-'} | Aufbewahrung:{' '}
+                    {diagnostics.backup?.retentionDays ?? '-'} Tage
+                  </p>
+                  <p>
+                    Letztes Backup:{' '}
+                    {diagnostics.backup?.lastBackupAt ? new Date(diagnostics.backup.lastBackupAt).toLocaleString('de-AT') : '-'}
+                  </p>
+                  <p className="break-all">Backup-Datei: {diagnostics.backup?.lastBackupFile || '-'}</p>
+                  <p>
+                    Letzter Restore:{' '}
+                    {diagnostics.backup?.lastRestoreAt ? new Date(diagnostics.backup.lastRestoreAt).toLocaleString('de-AT') : '-'}
+                  </p>
+                  <p className="break-all">Restore-Datei: {diagnostics.backup?.lastRestoreFile || '-'}</p>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleRunServerBackup()}
+                      className="inline-flex min-h-9 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Backup jetzt
+                    </button>
+                  </div>
                 </section>
 
                 <section className="rounded-lg border border-gray-200 p-3">
@@ -2222,6 +2468,39 @@ export function BoardHeader() {
                 Rolle: {diagnostics?.google?.accessRole || '-'} | Kalender-ID: {diagnostics?.google?.calendarId || '-'}
               </p>
               <p>Freigegeben an: {diagnostics?.google?.sharedWith?.length ? diagnostics.google.sharedWith.join(', ') : '-'}</p>
+              <p>
+                Security - Auth: {diagnostics?.security?.authEnabled ? 'Ja' : 'Nein'} | Rate Limit:{' '}
+                {diagnostics?.security?.rateLimit?.enabled ? 'Ja' : 'Nein'} | CORS:{' '}
+                {diagnostics?.security?.corsOrigins?.length ? diagnostics.security.corsOrigins.join(', ') : '-'}
+              </p>
+              <p>
+                Backup - Aktiv: {diagnostics?.backup?.enabled ? 'Ja' : 'Nein'} | Daily:{' '}
+                {diagnostics?.backup?.dailyEnabled ? 'Ja' : 'Nein'} | Letztes Backup:{' '}
+                {diagnostics?.backup?.lastBackupAt ? new Date(diagnostics.backup.lastBackupAt).toLocaleString('de-AT') : '-'}
+              </p>
+            </section>
+
+            <section className="mb-4 rounded-lg border border-gray-200 p-3">
+              <h3 className="mb-2 text-sm font-semibold text-gray-900">API Session (Client)</h3>
+              <p className="mb-2 text-xs text-gray-500">
+                Wird lokal im Browser gespeichert und fuer API-Requests als `x-promanager-api-key` gesendet.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="password"
+                  value={apiSessionKeyInput}
+                  onChange={(e) => setApiSessionKeyInput(e.target.value)}
+                  className="min-w-[220px] flex-1 rounded-md border border-gray-300 px-2 py-2 text-sm"
+                  placeholder="API Key eingeben"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveApiSessionKey}
+                  className="inline-flex min-h-10 items-center rounded-md border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Speichern
+                </button>
+              </div>
             </section>
 
             <div className="space-y-4">
@@ -2567,6 +2846,135 @@ export function BoardHeader() {
                     <input
                       value={runtimeConfigForm.guardrailImportConfidence}
                       onChange={(e) => updateRuntimeConfigField('guardrailImportConfidence', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-gray-200 p-3">
+                <h3 className="mb-3 text-sm font-semibold text-gray-900">Security und Backup</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Auth aktiv</span>
+                    <select
+                      value={runtimeConfigForm.securityAuthEnabled ? '1' : '0'}
+                      onChange={(e) => updateRuntimeConfigField('securityAuthEnabled', e.target.value === '1')}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    >
+                      <option value="1">Ja</option>
+                      <option value="0">Nein</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Rate Limit aktiv</span>
+                    <select
+                      value={runtimeConfigForm.securityRateLimitEnabled ? '1' : '0'}
+                      onChange={(e) => updateRuntimeConfigField('securityRateLimitEnabled', e.target.value === '1')}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    >
+                      <option value="1">Ja</option>
+                      <option value="0">Nein</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-700 sm:col-span-2">
+                    <span className="mb-1 block">CORS Origins (CSV, * fuer alle)</span>
+                    <input
+                      value={runtimeConfigForm.securityCorsOrigins}
+                      onChange={(e) => updateRuntimeConfigField('securityCorsOrigins', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Rate Limit Fenster (ms)</span>
+                    <input
+                      value={runtimeConfigForm.securityRateLimitWindowMs}
+                      onChange={(e) => updateRuntimeConfigField('securityRateLimitWindowMs', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Rate Limit Max API</span>
+                    <input
+                      value={runtimeConfigForm.securityRateLimitMax}
+                      onChange={(e) => updateRuntimeConfigField('securityRateLimitMax', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Rate Limit Max Webhook</span>
+                    <input
+                      value={runtimeConfigForm.securityRateLimitWebhookMax}
+                      onChange={(e) => updateRuntimeConfigField('securityRateLimitWebhookMax', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                  <p className="text-xs text-gray-500 sm:col-span-2">
+                    Gespeicherte Keys: Owner {runtimeConfig?.security?.ownerKeyCount ?? 0} | Dispatcher{' '}
+                    {runtimeConfig?.security?.dispatcherKeyCount ?? 0} | ReadOnly {runtimeConfig?.security?.readonlyKeyCount ?? 0}
+                  </p>
+                  <label className="text-sm text-gray-700 sm:col-span-2">
+                    <span className="mb-1 block">Owner API Keys (CSV, optional neu setzen)</span>
+                    <input
+                      value={runtimeConfigForm.securityOwnerKeys}
+                      onChange={(e) => updateRuntimeConfigField('securityOwnerKeys', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                      placeholder="owner-key-1, owner-key-2"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700 sm:col-span-2">
+                    <span className="mb-1 block">Dispatcher API Keys (CSV, optional neu setzen)</span>
+                    <input
+                      value={runtimeConfigForm.securityDispatcherKeys}
+                      onChange={(e) => updateRuntimeConfigField('securityDispatcherKeys', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                      placeholder="dispatcher-key-1"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700 sm:col-span-2">
+                    <span className="mb-1 block">ReadOnly API Keys (CSV, optional neu setzen)</span>
+                    <input
+                      value={runtimeConfigForm.securityReadonlyKeys}
+                      onChange={(e) => updateRuntimeConfigField('securityReadonlyKeys', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                      placeholder="readonly-key-1"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Backups aktiv</span>
+                    <select
+                      value={runtimeConfigForm.backupEnabled ? '1' : '0'}
+                      onChange={(e) => updateRuntimeConfigField('backupEnabled', e.target.value === '1')}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    >
+                      <option value="1">Ja</option>
+                      <option value="0">Nein</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Daily Backup aktiv</span>
+                    <select
+                      value={runtimeConfigForm.backupDailyEnabled ? '1' : '0'}
+                      onChange={(e) => updateRuntimeConfigField('backupDailyEnabled', e.target.value === '1')}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    >
+                      <option value="1">Ja</option>
+                      <option value="0">Nein</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Backup Aufbewahrung (Tage)</span>
+                    <input
+                      value={runtimeConfigForm.backupRetentionDays}
+                      onChange={(e) => updateRuntimeConfigField('backupRetentionDays', e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    <span className="mb-1 block">Daily Backup Stunde (UTC)</span>
+                    <input
+                      value={runtimeConfigForm.backupDailyHourUtc}
+                      onChange={(e) => updateRuntimeConfigField('backupDailyHourUtc', e.target.value)}
                       className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
                     />
                   </label>

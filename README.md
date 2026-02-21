@@ -22,13 +22,16 @@ Kanban-basiertes Service- und Termin-Management fuer Projekte.
 - `google_event_id`/Sync-Status je Karte in `card.values`
 - KI-Slot-Vorschlaege aus Google Calendar (freie Zeitfenster)
 - Diagnosepanel fuer Server, Telegram Webhook, LLM und Google Calendar
-- Technik-Konfigurationspanel im Dashboard (LLM/Google/Agent/Guardrail) fuer Laufzeitbetrieb
+- Technik-Konfigurationspanel im Dashboard (LLM/Google/Agent/Guardrail/Security/Backup) fuer Laufzeitbetrieb
 - Operations Radar mit Prioritaetswarnungen und Autopilot fuer sichere Quick-Fixes
 - Dispatch Center (Freigabe-Modus): priorisierte Einsatzvorschlaege mit Slot-Zuordnung und manueller Freigabe
 - Dispatch Presets im Config-Panel (Konservativ/Ausgeglichen/Aggressiv) mit 1-Klick-Uebernahme
 - Agent-Presets im Config-Panel (Fokus/Ausgeglichen/Voice-First) mit 1-Klick-Uebernahme
 - Preset-Telemetrie im Diagnosepanel (Preset-Nutzung + Dispatch-Freigabe/Verwerfungswirkung)
 - Zentrale Preset-Telemetrie serverseitig (geraeteuebergreifend) inkl. Reset/Export und Wochenranking
+- API-Rollenmodell (Owner/Dispatcher/ReadOnly) mit API-Key Headern (optional aktivierbar)
+- Striktes CORS + Rate-Limit fuer API/Webhook (konfigurierbar)
+- Geplante Backups mit Aufbewahrung, manueller Backup/Restore-API und Backup-Health
 - Smart-Suche und Schnellfilter (Ueberfaellig, Heute/Morgen, fehlende Basisdaten)
 - Bulk-Aktion: erledigte Karten gesammelt archivieren
 - Telegram-Dedupe auf Update- und Nachrichtenebene (robuster gegen Mehrfachimporte)
@@ -124,6 +127,18 @@ Nutze `.env.example` als Vorlage:
 - `DISPATCH_MAX_DAILY_SLOTS` (`1` bis `20`, default `3`)
 - `DISPATCH_REQUIRED_FIELDS` (CSV, z. B. `date,address,source`)
 - `DISPATCH_SCORE_WEIGHTS` (CSV `regel:wert`, z. B. `eingang:80,warteschlange:65,...`)
+- `SECURITY_AUTH_ENABLED` (`1` oder `0`, default `0`)
+- `SECURITY_OWNER_KEYS`, `SECURITY_DISPATCHER_KEYS`, `SECURITY_READONLY_KEYS` (CSV API Keys)
+- `SECURITY_CORS_ORIGINS` (CSV oder `*`)
+- `SECURITY_RATE_LIMIT_ENABLED` (`1` oder `0`)
+- `SECURITY_RATE_LIMIT_WINDOW_MS` (default `60000`)
+- `SECURITY_RATE_LIMIT_MAX` (default `300`)
+- `SECURITY_RATE_LIMIT_WEBHOOK_MAX` (default `200`)
+- `BACKUP_ENABLED` (`1` oder `0`)
+- `BACKUP_DAILY_ENABLED` (`1` oder `0`)
+- `BACKUP_DAILY_HOUR_UTC` (`0` bis `23`, default `2`)
+- `BACKUP_RETENTION_DAYS` (`1` bis `365`, default `21`)
+- `ALERT_WEBHOOK_URL` (optionaler Webhook fuer Security/Backup Alerts)
 
 ### 3) Webhook bei Telegram setzen
 
@@ -182,6 +197,14 @@ Bot-Kommandos:
 - `GET /api/telemetry/presets/export`
 - `POST /api/telemetry/presets/event`
 - `POST /api/telemetry/presets/reset`
+- `GET /api/backups`
+- `POST /api/backups/run`
+- `POST /api/backups/restore`
+
+Bei aktivierter API-Auth (`SECURITY_AUTH_ENABLED=1`) wird ein API-Key benoetigt:
+
+- Header `x-promanager-api-key: <key>`
+- oder `Authorization: Bearer <key>`
 
 ### 6) Lokale Smoke-Tests
 
@@ -219,9 +242,29 @@ npm run test
 npm run build
 ```
 
+CI-Workflow (`.github/workflows/ci.yml`) fuehrt `Lint`, `Test`, `Build` und `E2E (Playwright Chromium)` aus.
+
+## Git-Workflow (Empfohlen)
+
+1. Arbeitsstand committen/pushen
+2. Neues Feature immer in Branch `feature/<thema>` entwickeln
+3. Pull Request nach `main`
+4. Nur mergen, wenn alle CI-Checks gruen sind
+5. Branch-Protection fuer `main` gemaess `docs/branch-protection-checklist.md` setzen
+
+## Produktion/Operations
+
+- Runbook: `docs/operations-runbook.md`
+- Import/Export Versionierung + Migration: `docs/import-export-versioning.md`
+- Env-Profile Vorlagen:
+  - `.env.development.example`
+  - `.env.staging.example`
+  - `.env.production.example`
+
 ## Datenhaltung
 
 - Board-Daten werden lokal gespeichert (`localStorage`)
 - Dashboard-Beschriftung und Untertitel werden ebenfalls lokal gespeichert
 - JSON-Backups enthalten Board + UI-Einstellungen
 - Telegram-MVP persistiert serverseitig unter `server/data/state.json` (Board, Pending-Proposals, Audit)
+- Server-Backups liegen unter `server/data/backups/*.json` (Daily + manuell)
