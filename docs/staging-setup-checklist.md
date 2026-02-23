@@ -24,3 +24,8 @@ npm run ops:generate-api-keys
    - LLM bereit
    - Kalender bereit
    - Backup aktiv
+8. Run final local readiness check:
+
+```bash
+npm run ops:go-live-check
+```
