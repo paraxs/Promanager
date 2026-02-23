@@ -1,11 +1,15 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Owner,
-  [Parameter(Mandatory = $true)][string]$Repo,
+  [string]$Owner = $env:GITHUB_REPO_OWNER,
+  [string]$Repo = $env:GITHUB_REPO_NAME,
   [string]$Branch = 'main',
   [string]$Token = $env:GITHUB_TOKEN
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($Owner) -or [string]::IsNullOrWhiteSpace($Repo)) {
+  throw 'Owner/Repo fehlen. Nutze Argumente oder setze GITHUB_REPO_OWNER und GITHUB_REPO_NAME.'
+}
 
 if ([string]::IsNullOrWhiteSpace($Token)) {
   throw 'GITHUB_TOKEN fehlt. Setze ein Personal Access Token mit repo/admin:repo_hook Rechten.'
@@ -45,4 +49,4 @@ $body = @{
 }
 
 Invoke-RestMethod -Method Put -Uri $uri -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 10)
-Write-Host "Branch protection fuer $Owner/$Repo:$Branch wurde gesetzt."
+Write-Host "Branch protection fuer ${Owner}/${Repo}:${Branch} wurde gesetzt."

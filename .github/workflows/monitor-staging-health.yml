@@ -12,14 +12,18 @@ jobs:
   healthcheck:
     name: Healthcheck
     runs-on: ubuntu-latest
-    if: ${{ secrets.STAGING_HEALTH_URL != '' }}
     env:
       STAGING_HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
       STAGING_READONLY_API_KEY: ${{ secrets.STAGING_READONLY_API_KEY }}
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
+      - name: Skip (health URL missing)
+        if: env.STAGING_HEALTH_URL == ''
+        run: echo "STAGING_HEALTH_URL ist leer. Healthcheck wird uebersprungen."
+
       - name: Query /api/health
         id: check
+        if: env.STAGING_HEALTH_URL != ''
         run: |
           set -euo pipefail
           if [ -n "${STAGING_READONLY_API_KEY:-}" ]; then
@@ -31,7 +35,7 @@ jobs:
           node -e "const fs=require('node:fs');const health=JSON.parse(fs.readFileSync('health.json','utf8'));if(!health||health.ok!==true){throw new Error('Health payload is not ok=true')}const alerts=Array.isArray(health.alerts)?health.alerts:[];const critical=alerts.filter((entry)=>String(entry?.severity??'').toLowerCase()==='critical');if(critical.length>0){throw new Error('Critical alerts present: '+critical.map((entry)=>entry.code||entry.message).join(', '))};console.log('Healthcheck passed.');"
 
       - name: Notify on failure
-        if: failure() && env.ALERT_WEBHOOK_URL != ''
+        if: failure() && env.STAGING_HEALTH_URL != '' && env.ALERT_WEBHOOK_URL != ''
         run: |
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
