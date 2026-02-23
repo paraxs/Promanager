@@ -42,30 +42,31 @@ jobs:
       VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_STAGING }}
     steps:
       - name: Skip (frontend deploy secrets missing)
-        if: env.NETLIFY_AUTH_TOKEN == '' || env.NETLIFY_SITE_ID == '' || env.VITE_API_BASE_URL == ''
-        run: echo "Frontend-Deploy uebersprungen: NETLIFY_* oder VITE_API_BASE_URL_STAGING fehlt."
+        if: ${{ env.NETLIFY_AUTH_TOKEN == '' || env.NETLIFY_SITE_ID == '' || env.VITE_API_BASE_URL == '' }}
+        run: |
+          echo "Frontend-Deploy uebersprungen: NETLIFY_* oder VITE_API_BASE_URL_STAGING fehlt."
 
       - name: Checkout
-        if: env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != ''
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != '' }}
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        if: env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != ''
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != '' }}
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
       - name: Install dependencies
-        if: env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != ''
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != '' }}
         run: npm ci
 
       - name: Build frontend for staging
-        if: env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != ''
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != '' }}
         run: npm run build
 
       - name: Deploy to Netlify (staging site)
-        if: env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != ''
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' && env.VITE_API_BASE_URL != '' }}
         run: npx netlify-cli deploy --dir=dist --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --prod --message "staging-${GITHUB_SHA::7}"
 
   deploy_api:
@@ -76,11 +77,12 @@ jobs:
       API_STAGING_DEPLOY_HOOK_URL: ${{ secrets.API_STAGING_DEPLOY_HOOK_URL }}
     steps:
       - name: Skip (API deploy hook missing)
-        if: env.API_STAGING_DEPLOY_HOOK_URL == ''
-        run: echo "API-Deploy uebersprungen: API_STAGING_DEPLOY_HOOK_URL fehlt."
+        if: ${{ env.API_STAGING_DEPLOY_HOOK_URL == '' }}
+        run: |
+          echo "API-Deploy uebersprungen: API_STAGING_DEPLOY_HOOK_URL fehlt."
 
       - name: Trigger API deploy hook
-        if: env.API_STAGING_DEPLOY_HOOK_URL != ''
+        if: ${{ env.API_STAGING_DEPLOY_HOOK_URL != '' }}
         run: curl -fsS -X POST "$API_STAGING_DEPLOY_HOOK_URL"
 
   summary:
