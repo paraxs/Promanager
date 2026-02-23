@@ -19,6 +19,7 @@ Kanban-basiertes Service- und Termin-Management fuer Projekte.
 - Google Calendar Produktionshaertung: Relink/Recreate bei geloeschten/geaenderten Events + Dublettenbereinigung
 - Optionaler Auto-Sync: Telegram-Import -> Google Calendar
 - Optionaler taeglicher Hintergrund-Resync fuer Kalender-Konsistenz
+- Optionaler woechentlicher Hard-Resync fuer Kalender-Konsistenz
 - `google_event_id`/Sync-Status je Karte in `card.values`
 - KI-Slot-Vorschlaege aus Google Calendar (freie Zeitfenster)
 - Diagnosepanel fuer Server, Telegram Webhook, LLM und Google Calendar
@@ -122,6 +123,9 @@ Nutze `.env.example` als Vorlage:
 - `GOOGLE_SHARED_WITH` (mehrere E-Mails mit `,` oder `;` getrennt)
 - `AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT` (`1` oder `0`)
 - `GOOGLE_DAILY_RESYNC_ENABLED` (`1` oder `0`)
+- `GOOGLE_WEEKLY_HARD_RESYNC_ENABLED` (`1` oder `0`)
+- `GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC` (`0`=So bis `6`=Sa)
+- `GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC` (`0` bis `23`)
 - `DISPATCH_ENABLED` (`1` oder `0`)
 - `DISPATCH_MIN_SCORE` (`0` bis `200`, default `55`)
 - `DISPATCH_MAX_DAILY_SLOTS` (`1` bis `20`, default `3`)
@@ -139,6 +143,7 @@ Nutze `.env.example` als Vorlage:
 - `BACKUP_DAILY_HOUR_UTC` (`0` bis `23`, default `2`)
 - `BACKUP_RETENTION_DAYS` (`1` bis `365`, default `21`)
 - `ALERT_WEBHOOK_URL` (optionaler Webhook fuer Security/Backup Alerts)
+- Frontend (Staging/Prod, getrennte API): `VITE_API_BASE_URL=https://<api-domain>`
 
 ### 3) Webhook bei Telegram setzen
 
@@ -220,10 +225,12 @@ npm run test:telegram:singleline
 npm run test:telegram:source
 npm run test:telegram:source-property
 npm run test:telegram:address-optional-location
+npm run ops:backup-drill
 ```
 
 - `test:telegram:smoke`: Message -> Proposal -> `Importieren` -> Card + Audit
 - `test:telegram:guardrail`: niedrige Confidence -> `tg:ok` wird serverseitig blockiert
+- `ops:backup-drill`: startet lokalen Drill (`/api/backups/run` + `/api/backups/restore`)
 
 ### 7) Telegram State Reset (optional)
 
@@ -244,6 +251,11 @@ npm run build
 
 CI-Workflow (`.github/workflows/ci.yml`) fuehrt `Lint`, `Test`, `Build` und `E2E (Playwright Chromium)` aus.
 
+Zusatz-Workflows:
+
+- Staging Deploy (manuell): `.github/workflows/deploy-staging.yml`
+- Staging Health Monitoring (15 min): `.github/workflows/monitor-staging-health.yml`
+
 ## Git-Workflow (Empfohlen)
 
 1. Arbeitsstand committen/pushen
@@ -252,10 +264,18 @@ CI-Workflow (`.github/workflows/ci.yml`) fuehrt `Lint`, `Test`, `Build` und `E2E
 4. Nur mergen, wenn alle CI-Checks gruen sind
 5. Branch-Protection fuer `main` gemaess `docs/branch-protection-checklist.md` setzen
 
+Hilfsskripte:
+
+- API Keys generieren: `npm run ops:generate-api-keys`
+- Branch Protection via API setzen: `npm run ops:set-branch-protection -- -Owner <owner> -Repo <repo> -Branch main`
+
 ## Produktion/Operations
 
 - Runbook: `docs/operations-runbook.md`
 - Import/Export Versionierung + Migration: `docs/import-export-versioning.md`
+- Backup-Drill-Protokoll: `docs/backup-drill-log.md`
+- Staging Setup Checkliste: `docs/staging-setup-checklist.md`
+- Staging Deployment Templates: `deploy/staging/README.md`
 - Env-Profile Vorlagen:
   - `.env.development.example`
   - `.env.staging.example`

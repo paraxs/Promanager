@@ -12,6 +12,13 @@ Set these required status checks in GitHub branch protection for `main`:
 - `Build`
 - `E2E (Playwright Chromium)`
 
+Optional automation (PowerShell + GitHub API):
+
+```powershell
+$env:GITHUB_TOKEN="<PAT>"
+npm run ops:set-branch-protection -- -Owner paraxs -Repo Promanager -Branch main
+```
+
 ## Recommended protection flags
 
 - Require pull request before merging

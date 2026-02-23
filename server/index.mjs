@@ -91,6 +91,9 @@ let GOOGLE_SHARE_ROLE = ['owner', 'writer', 'reader', 'freeBusyReader'].includes
 let GOOGLE_SHARED_WITH = parseSharedWithList(process.env.GOOGLE_SHARED_WITH ?? '');
 let AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT = parseEnabledFlag(process.env.AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT ?? '0');
 let GOOGLE_DAILY_RESYNC_ENABLED = parseEnabledFlag(process.env.GOOGLE_DAILY_RESYNC_ENABLED ?? '0');
+let GOOGLE_WEEKLY_HARD_RESYNC_ENABLED = parseEnabledFlag(process.env.GOOGLE_WEEKLY_HARD_RESYNC_ENABLED ?? '0');
+let GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC = clampNumber(process.env.GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC ?? 0, 0, 6, 0);
+let GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC = clampNumber(process.env.GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC ?? 3, 0, 23, 3);
 let DISPATCH_ENABLED = parseEnabledFlag(process.env.DISPATCH_ENABLED ?? '1', true);
 let DISPATCH_MIN_SCORE = clampNumber(process.env.DISPATCH_MIN_SCORE ?? 55, 0, 200, 55);
 let DISPATCH_MAX_DAILY_SLOTS = clampNumber(process.env.DISPATCH_MAX_DAILY_SLOTS ?? 3, 1, 20, 3);
@@ -272,6 +275,7 @@ const createDefaultState = () => ({
     lastRestoreAt: '',
     lastRestoreFile: '',
     lastDailyBackupDate: '',
+    lastWeeklyHardResyncDate: '',
   },
   audit: [],
   lastUpdateId: -1,
@@ -336,6 +340,9 @@ const buildRuntimeConfigPayload = ({ includeSecrets = false } = {}) => ({
   automation: {
     autoGoogleSyncOnTelegramImport: AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT,
     dailyGoogleResyncEnabled: GOOGLE_DAILY_RESYNC_ENABLED,
+    weeklyHardGoogleResyncEnabled: GOOGLE_WEEKLY_HARD_RESYNC_ENABLED,
+    weeklyHardGoogleResyncDayUtc: GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC,
+    weeklyHardGoogleResyncHourUtc: GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC,
   },
   dispatch: {
     enabled: DISPATCH_ENABLED,
@@ -423,6 +430,28 @@ const applyRuntimeConfig = (raw) => {
   }
   if ('dailyGoogleResyncEnabled' in automation) {
     GOOGLE_DAILY_RESYNC_ENABLED = parseEnabledFlag(automation.dailyGoogleResyncEnabled, GOOGLE_DAILY_RESYNC_ENABLED);
+  }
+  if ('weeklyHardGoogleResyncEnabled' in automation) {
+    GOOGLE_WEEKLY_HARD_RESYNC_ENABLED = parseEnabledFlag(
+      automation.weeklyHardGoogleResyncEnabled,
+      GOOGLE_WEEKLY_HARD_RESYNC_ENABLED,
+    );
+  }
+  if ('weeklyHardGoogleResyncDayUtc' in automation) {
+    GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC = clampNumber(
+      automation.weeklyHardGoogleResyncDayUtc,
+      0,
+      6,
+      GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC,
+    );
+  }
+  if ('weeklyHardGoogleResyncHourUtc' in automation) {
+    GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC = clampNumber(
+      automation.weeklyHardGoogleResyncHourUtc,
+      0,
+      23,
+      GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC,
+    );
   }
 
   const dispatch = raw.dispatch && typeof raw.dispatch === 'object' ? raw.dispatch : {};
@@ -732,6 +761,7 @@ const ensureStateShape = (raw) => {
           lastRestoreAt: String(raw.maintenance.lastRestoreAt ?? ''),
           lastRestoreFile: String(raw.maintenance.lastRestoreFile ?? ''),
           lastDailyBackupDate: String(raw.maintenance.lastDailyBackupDate ?? ''),
+          lastWeeklyHardResyncDate: String(raw.maintenance.lastWeeklyHardResyncDate ?? ''),
         }
       : {
           ...fallback.maintenance,
@@ -3231,6 +3261,46 @@ const maybeRunDailyGoogleResync = async () => {
   }
 };
 
+const maybeRunWeeklyHardGoogleResync = async () => {
+  if (!GOOGLE_WEEKLY_HARD_RESYNC_ENABLED) return;
+  if (!GOOGLE_ENABLED || !isGoogleConfigured()) return;
+  if (googleSyncJobPromise) return;
+
+  const now = new Date();
+  if (now.getUTCDay() !== GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC) return;
+  if (now.getUTCHours() !== GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC) return;
+
+  const dateKey = now.toISOString().slice(0, 10);
+  const lastDone = String(state.maintenance?.lastWeeklyHardResyncDate ?? '');
+  if (lastDone === dateKey) return;
+
+  try {
+    await runGoogleSyncJob({
+      boardInput: state.board,
+      forceResync: true,
+      persistBoardUpdates: true,
+      modeLabel: 'weekly_hard_resync',
+      actor: 'scheduler',
+    });
+    state.maintenance = {
+      ...(state.maintenance ?? {}),
+      lastWeeklyHardResyncDate: dateKey,
+    };
+    addAudit('google_weekly_hard_resync_completed', {
+      actor: 'scheduler',
+      dateKey,
+    });
+    await persistState();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Weekly hard Google resync failed:', error);
+    await sendSecurityAlert('Weekly hard Google resync failed', {
+      message,
+      dateKey,
+    });
+  }
+};
+
 const maybeRunDailyBackup = async () => {
   if (!BACKUP_ENABLED || !BACKUP_DAILY_ENABLED) return;
 
@@ -3530,12 +3600,16 @@ const restoreStateFromBackupFile = async ({ fileName, actor = 'system' } = {}) =
   const sourcePath = path.join(BACKUP_DIR, safeFile);
   if (!existsSync(sourcePath)) throw new Error('Backup file not found.');
 
+  const previousMaintenance = isObject(state.maintenance) ? { ...state.maintenance } : {};
   const raw = await readFile(sourcePath, 'utf8');
   const parsed = JSON.parse(raw);
   const normalized = ensureStateShape(parsed);
   state = normalized;
   state.maintenance = {
     ...(state.maintenance ?? {}),
+    lastBackupAt: String(previousMaintenance.lastBackupAt ?? state.maintenance?.lastBackupAt ?? ''),
+    lastBackupFile: String(previousMaintenance.lastBackupFile ?? state.maintenance?.lastBackupFile ?? ''),
+    lastDailyBackupDate: String(previousMaintenance.lastDailyBackupDate ?? state.maintenance?.lastDailyBackupDate ?? ''),
     lastRestoreAt: toNowIso(),
     lastRestoreFile: safeFile,
   };
@@ -4681,6 +4755,18 @@ const buildHealthAlerts = ({ telegramWebhook, llmConfigured, googleHealth, googl
     }
   }
 
+  if (GOOGLE_WEEKLY_HARD_RESYNC_ENABLED) {
+    const lastWeekly = String(state.maintenance?.lastWeeklyHardResyncDate ?? '');
+    if (!lastWeekly) {
+      add('warn', 'google_weekly_hard_resync_missing', 'Weekly Hard-Resync ist aktiv, aber noch nie gelaufen.');
+    } else {
+      const ageMs = Date.now() - Date.parse(`${lastWeekly}T00:00:00.000Z`);
+      if (Number.isFinite(ageMs) && ageMs > 9 * 24 * 60 * 60 * 1000) {
+        add('warn', 'google_weekly_hard_resync_stale', 'Letzter Weekly Hard-Resync ist aelter als 9 Tage.');
+      }
+    }
+  }
+
   return alerts;
 };
 
@@ -4734,6 +4820,10 @@ const buildHealthPayload = async () => {
     automation: {
       autoGoogleSyncOnTelegramImport: AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT,
       dailyGoogleResyncEnabled: GOOGLE_DAILY_RESYNC_ENABLED,
+      weeklyHardGoogleResyncEnabled: GOOGLE_WEEKLY_HARD_RESYNC_ENABLED,
+      weeklyHardGoogleResyncDayUtc: GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC,
+      weeklyHardGoogleResyncHourUtc: GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC,
+      lastWeeklyHardResyncDate: String(state.maintenance?.lastWeeklyHardResyncDate ?? ''),
     },
     dispatch: {
       enabled: DISPATCH_ENABLED,
@@ -4773,6 +4863,7 @@ const buildHealthPayload = async () => {
       lastBackupAt: String(state.maintenance?.lastBackupAt ?? ''),
       lastBackupFile: String(state.maintenance?.lastBackupFile ?? ''),
       lastDailyBackupDate: String(state.maintenance?.lastDailyBackupDate ?? ''),
+      lastWeeklyHardResyncDate: String(state.maintenance?.lastWeeklyHardResyncDate ?? ''),
       lastRestoreAt: String(state.maintenance?.lastRestoreAt ?? ''),
       lastRestoreFile: String(state.maintenance?.lastRestoreFile ?? ''),
     },
@@ -4985,7 +5076,7 @@ server.listen(PORT, HOST, () => {
     console.warn('LLM_ENABLED is true but OPENAI_API_KEY is missing. Falling back to rule parser.');
   }
   console.log(
-    `Automation: autoGoogleSyncOnTelegramImport=${AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT} | dailyGoogleResyncEnabled=${GOOGLE_DAILY_RESYNC_ENABLED}`,
+    `Automation: autoGoogleSyncOnTelegramImport=${AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT} | dailyGoogleResyncEnabled=${GOOGLE_DAILY_RESYNC_ENABLED} | weeklyHardGoogleResyncEnabled=${GOOGLE_WEEKLY_HARD_RESYNC_ENABLED} (day=${GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC}, hourUtc=${GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC})`,
   );
   if (SECURITY_AUTH_ENABLED) {
     console.log(
@@ -4999,7 +5090,9 @@ server.listen(PORT, HOST, () => {
     cleanupRateLimitBuckets();
     void maybeRunDailyBackup();
     void maybeRunDailyGoogleResync();
+    void maybeRunWeeklyHardGoogleResync();
   }, GOOGLE_DAILY_RESYNC_CHECK_INTERVAL_MS);
   void maybeRunDailyBackup();
   void maybeRunDailyGoogleResync();
+  void maybeRunWeeklyHardGoogleResync();
 });

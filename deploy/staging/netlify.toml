@@ -1,0 +1,9 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# In Netlify UI set:
+# VITE_API_BASE_URL=https://<your-staging-api-domain>

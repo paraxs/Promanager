@@ -6,6 +6,7 @@ import { useBoardStore } from '../store/boardStore';
 import type { PropertyDefinition, ServiceCard, Status } from '../types/board';
 import { createDateInputFromTodayOffset, getAppointmentBadge } from '../utils/scheduling';
 import { cx } from '../utils/cx';
+import { apiFetch } from '../utils/apiClient';
 
 type SlotSuggestion = {
   date: string;
@@ -274,7 +275,7 @@ export function DispatchCenter({ open, onClose, onRunGoogleSync, dispatchConfig,
     setSlotError('');
     try {
       const top = Math.max(6, Math.min(30, pendingProposals.length * 3));
-      const response = await fetch('/api/google/slots', {
+      const response = await apiFetch('/api/google/slots', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: promanager-api-staging
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: node --env-file=.env server/index.mjs
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TELEGRAM_MVP_PORT
+        value: "8787"
+      - key: TELEGRAM_MVP_HOST
+        value: "0.0.0.0"
+      - key: GOOGLE_ENABLED
+        value: "1"
+      - key: SECURITY_AUTH_ENABLED
+        value: "1"
+      - key: BACKUP_ENABLED
+        value: "1"
+      - key: BACKUP_DAILY_ENABLED
+        value: "1"
+      - key: BACKUP_DAILY_HOUR_UTC
+        value: "2"
+      - key: GOOGLE_DAILY_RESYNC_ENABLED
+        value: "1"
+      - key: GOOGLE_WEEKLY_HARD_RESYNC_ENABLED
+        value: "1"
+      - key: GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC
+        value: "0"
+      - key: GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC
+        value: "3"
+# Secrets (Token/Keys/Credentials) in Render Dashboard setzen.
