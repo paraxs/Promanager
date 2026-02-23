@@ -267,13 +267,15 @@ Zusatz-Workflows:
 Hilfsskripte:
 
 - API Keys generieren: `npm run ops:generate-api-keys`
-- Branch Protection via API setzen: `npm run ops:set-branch-protection -- -Owner <owner> -Repo <repo> -Branch main`
+- Branch Protection via API setzen: `npm run ops:set-branch-protection -- <owner> <repo> main`
+- Finaler Go-Live Check lokal: `npm run ops:go-live-check`
 
 ## Produktion/Operations
 
 - Runbook: `docs/operations-runbook.md`
 - Import/Export Versionierung + Migration: `docs/import-export-versioning.md`
 - Backup-Drill-Protokoll: `docs/backup-drill-log.md`
+- Go-Live Checkliste + End-to-End Ablauf: `docs/go-live-checklist.md`
 - Staging Setup Checkliste: `docs/staging-setup-checklist.md`
 - Staging Deployment Templates: `deploy/staging/README.md`
 - Env-Profile Vorlagen:

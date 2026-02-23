@@ -16,7 +16,7 @@ Optional automation (PowerShell + GitHub API):
 
 ```powershell
 $env:GITHUB_TOKEN="<PAT>"
-npm run ops:set-branch-protection -- -Owner paraxs -Repo Promanager -Branch main
+npm run ops:set-branch-protection -- paraxs Promanager main
 ```
 
 ## Recommended protection flags
