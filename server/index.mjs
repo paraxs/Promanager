@@ -392,6 +392,7 @@ const applyRuntimeConfig = (raw) => {
   if ('baseUrl' in llm && typeof llm.baseUrl === 'string') OPENAI_BASE_URL = sanitizeBaseUrl(llm.baseUrl, OPENAI_BASE_URL);
   if ('apiKey' in llm && typeof llm.apiKey === 'string') OPENAI_API_KEY = llm.apiKey.trim();
 
+  const googleCredentialsBefore = `${GOOGLE_CLIENT_ID}|${GOOGLE_CLIENT_SECRET}|${GOOGLE_REFRESH_TOKEN}`;
   const google = raw.google && typeof raw.google === 'object' ? raw.google : {};
   if ('enabled' in google) GOOGLE_ENABLED = parseEnabledFlag(google.enabled, GOOGLE_ENABLED);
   if ('clientId' in google && typeof google.clientId === 'string') GOOGLE_CLIENT_ID = google.clientId.trim();
@@ -410,6 +411,15 @@ const applyRuntimeConfig = (raw) => {
   }
   if ('shareRole' in google) GOOGLE_SHARE_ROLE = normalizeShareRole(google.shareRole, GOOGLE_SHARE_ROLE);
   if ('sharedWith' in google) GOOGLE_SHARED_WITH = parseSharedWithList(google.sharedWith);
+  const googleCredentialsAfter = `${GOOGLE_CLIENT_ID}|${GOOGLE_CLIENT_SECRET}|${GOOGLE_REFRESH_TOKEN}`;
+  if (googleCredentialsAfter !== googleCredentialsBefore) {
+    googleInvalidGrantDetected = false;
+    googleAccessTokenCache = {
+      token: '',
+      expiresAtMs: 0,
+    };
+    googleResolvedCalendarId = '';
+  }
 
   const agent = raw.agent && typeof raw.agent === 'object' ? raw.agent : {};
   if ('enabled' in agent) AGENT_ENABLED = parseEnabledFlag(agent.enabled, AGENT_ENABLED);
@@ -2392,7 +2402,8 @@ const sleep = (ms) =>
     setTimeout(resolve, ms);
   });
 
-const isGoogleConfigured = () => GOOGLE_ENABLED && Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN);
+const isGoogleConfigured = () =>
+  GOOGLE_ENABLED && !googleInvalidGrantDetected && Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN);
 
 const normalizeGoogleSource = (value) => normalizeTelegramSource(value);
 
@@ -2541,6 +2552,44 @@ class GoogleApiError extends Error {
   }
 }
 
+class GoogleOAuthError extends Error {
+  constructor({ status, detail, code = '' }) {
+    const normalizedCode = String(code ?? '').trim().toLowerCase();
+    const invalidGrant = normalizedCode === 'invalid_grant';
+    super(
+      invalidGrant
+        ? 'Google OAuth fehlgeschlagen: Refresh-Token ungueltig oder widerrufen (invalid_grant). Bitte in "Technik-Konfiguration" einen neuen Refresh Token setzen.'
+        : `Google OAuth fehlgeschlagen (${status}): ${detail}`,
+    );
+    this.name = 'GoogleOAuthError';
+    this.status = Number(status ?? 500);
+    this.detail = String(detail ?? '');
+    this.code = normalizedCode;
+  }
+}
+
+const parseGoogleOAuthErrorCode = (detail) => {
+  try {
+    const parsed = JSON.parse(String(detail ?? ''));
+    return String(parsed?.error ?? '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
+const isGoogleInvalidGrantError = (errorOrMessage) => {
+  if (errorOrMessage && typeof errorOrMessage === 'object' && String(errorOrMessage.code ?? '') === 'invalid_grant') {
+    return true;
+  }
+  const message =
+    typeof errorOrMessage === 'string'
+      ? errorOrMessage
+      : errorOrMessage instanceof Error
+        ? errorOrMessage.message
+        : String(errorOrMessage ?? '');
+  return /invalid[_\s-]?grant/i.test(message);
+};
+
 const getGoogleApiStatus = (error) => {
   if (error && typeof error === 'object' && Number.isInteger(error.status)) return Number(error.status);
   if (!(error instanceof Error)) return null;
@@ -2559,6 +2608,7 @@ let googleAccessTokenCache = {
 };
 let googleResolvedCalendarId = '';
 let googleSyncJobPromise = null;
+let googleInvalidGrantDetected = false;
 
 const getGoogleAccessToken = async () => {
   if (!isGoogleConfigured()) throw new Error('Google Calendar ist nicht konfiguriert.');
@@ -2581,7 +2631,16 @@ const getGoogleAccessToken = async () => {
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Google OAuth fehlgeschlagen (${response.status}): ${detail}`);
+    const code = parseGoogleOAuthErrorCode(detail);
+    if (code === 'invalid_grant') {
+      googleInvalidGrantDetected = true;
+      await disableGoogleAutomationAfterInvalidGrant('google_oauth');
+    }
+    throw new GoogleOAuthError({
+      status: response.status,
+      detail,
+      code,
+    });
   }
 
   const payload = await response.json();
@@ -2594,6 +2653,30 @@ const getGoogleAccessToken = async () => {
     expiresAtMs: now + Math.max(60, expiresIn) * 1000,
   };
   return googleAccessTokenCache.token;
+};
+
+const disableGoogleAutomationAfterInvalidGrant = async (actor = 'system') => {
+  googleAccessTokenCache = {
+    token: '',
+    expiresAtMs: 0,
+  };
+  googleResolvedCalendarId = '';
+
+  const hadAutomationEnabled =
+    AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT || GOOGLE_DAILY_RESYNC_ENABLED || GOOGLE_WEEKLY_HARD_RESYNC_ENABLED;
+  if (!hadAutomationEnabled) return;
+
+  AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT = false;
+  GOOGLE_DAILY_RESYNC_ENABLED = false;
+  GOOGLE_WEEKLY_HARD_RESYNC_ENABLED = false;
+
+  addAudit('google_invalid_grant_recovery', {
+    actor,
+    autoGoogleSyncOnTelegramImport: false,
+    dailyGoogleResyncEnabled: false,
+    weeklyHardGoogleResyncEnabled: false,
+  });
+  await persistRuntimeConfig();
 };
 
 const googleApi = async (path, { method = 'GET', query, body, retries = 2 } = {}) => {
@@ -2712,7 +2795,9 @@ const getGoogleCalendarHealth = async () => {
       accessRole: '',
       canWrite: false,
       sharedWith: GOOGLE_SHARED_WITH,
-      error: 'Google Credentials unvollständig.',
+      error: googleInvalidGrantDetected
+        ? 'Google OAuth fehlgeschlagen: Refresh-Token ungueltig oder widerrufen (invalid_grant). Bitte in "Technik-Konfiguration" einen neuen Refresh Token setzen.'
+        : 'Google Credentials unvollstaendig.',
     };
   }
 
@@ -2731,9 +2816,10 @@ const getGoogleCalendarHealth = async () => {
       error: '',
     };
   } catch (error) {
+    const invalidGrant = isGoogleInvalidGrantError(error);
     return {
       enabled: true,
-      configured: true,
+      configured: !invalidGrant,
       calendarConfigured: false,
       calendarId: GOOGLE_CALENDAR_ID || googleResolvedCalendarId || '',
       accessRole: '',
@@ -3216,6 +3302,9 @@ const runGoogleSyncJob = async ({
       await persistState();
       return syncResult;
     } catch (error) {
+      if (isGoogleInvalidGrantError(error)) {
+        await disableGoogleAutomationAfterInvalidGrant(actor);
+      }
       const message = error instanceof Error ? error.message : String(error);
       state.googleSync = {
         ...createDefaultGoogleSyncState(),
@@ -3231,7 +3320,7 @@ const runGoogleSyncJob = async ({
         message,
       });
       await persistState();
-      throw error;
+      throw new Error(message);
     } finally {
       googleSyncJobPromise = null;
     }
@@ -4732,7 +4821,15 @@ const buildHealthAlerts = ({ telegramWebhook, llmConfigured, googleHealth, googl
   }
 
   if (googleSync?.ok === false) {
-    add('critical', 'google_sync_failed', `Letzter Google-Sync ist fehlgeschlagen: ${googleSync?.error ?? '-'}`);
+    if (isGoogleInvalidGrantError(googleSync?.error ?? '')) {
+      add(
+        'critical',
+        'google_refresh_token_invalid',
+        'Google OAuth fehlgeschlagen: Refresh-Token ungueltig oder widerrufen (invalid_grant). Bitte in "Technik-Konfiguration" einen neuen Refresh Token setzen.',
+      );
+    } else {
+      add('critical', 'google_sync_failed', `Letzter Google-Sync ist fehlgeschlagen: ${googleSync?.error ?? '-'}`);
+    }
   }
 
   if (Number(Object.keys(state.pending ?? {}).length) > 25) {
