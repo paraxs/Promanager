@@ -22,3 +22,11 @@ GitHub Actions deploy workflow
   - `STAGING_HEALTH_URL`
   - `STAGING_READONLY_API_KEY`
   - `ALERT_WEBHOOK_URL`
+
+Live Deploy (Netlify)
+- Workflow: `.github/workflows/deploy-live.yml`
+- Required secrets:
+  - `NETLIFY_AUTH_TOKEN_PROD`
+  - `NETLIFY_SITE_ID_PROD`
+  - `VITE_API_BASE_URL_PROD`
+- Local runbook: `docs/netlify-live-runbook.md`

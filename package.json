@@ -31,6 +31,9 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium",
+    "deploy:netlify:preview": "node scripts/deploy-netlify-live.mjs --preview",
+    "deploy:netlify:live": "node scripts/deploy-netlify-live.mjs",
+    "deploy:netlify:live:dry-run": "node scripts/deploy-netlify-live.mjs --dry-run",
     "preview": "vite preview"
   },
   "dependencies": {

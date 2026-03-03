@@ -255,6 +255,7 @@ Zusatz-Workflows:
 
 - Staging Deploy (manuell): `.github/workflows/deploy-staging.yml`
 - Staging Health Monitoring (15 min): `.github/workflows/monitor-staging-health.yml`
+- Live Deploy (manuell): `.github/workflows/deploy-live.yml`
 
 ## Git-Workflow (Empfohlen)
 
@@ -269,6 +270,9 @@ Hilfsskripte:
 - API Keys generieren: `npm run ops:generate-api-keys`
 - Branch Protection via API setzen: `npm run ops:set-branch-protection -- <owner> <repo> main`
 - Finaler Go-Live Check lokal: `npm run ops:go-live-check`
+- Netlify Preview Deploy lokal: `npm run deploy:netlify:preview`
+- Netlify Live Deploy lokal: `npm run deploy:netlify:live`
+- Netlify Live Dry-Run lokal: `npm run deploy:netlify:live:dry-run`
 
 ## Produktion/Operations
 
@@ -276,8 +280,10 @@ Hilfsskripte:
 - Import/Export Versionierung + Migration: `docs/import-export-versioning.md`
 - Backup-Drill-Protokoll: `docs/backup-drill-log.md`
 - Go-Live Checkliste + End-to-End Ablauf: `docs/go-live-checklist.md`
+- Netlify Live Runbook: `docs/netlify-live-runbook.md`
 - Staging Setup Checkliste: `docs/staging-setup-checklist.md`
 - Staging Deployment Templates: `deploy/staging/README.md`
+- Production Deployment Templates: `deploy/production/README.md`
 - Env-Profile Vorlagen:
   - `.env.development.example`
   - `.env.staging.example`
