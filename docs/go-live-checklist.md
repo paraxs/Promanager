@@ -57,3 +57,21 @@ Enthaelt:
 - `test:e2e`
 - `ops:backup-drill`
 - plus Hinweis, welche Staging-Secrets im aktuellen Terminal fehlen
+
+## 4) Frontend Live-Deploy (Netlify)
+
+GitHub Actions Secrets fuer Live:
+
+- `NETLIFY_AUTH_TOKEN_PROD`
+- `NETLIFY_SITE_ID_PROD`
+- `VITE_API_BASE_URL_PROD`
+
+Lokaler Live-Deploy:
+
+```bash
+npm run deploy:netlify:live
+```
+
+Workflow Live-Deploy:
+
+- `.github/workflows/deploy-live.yml`
