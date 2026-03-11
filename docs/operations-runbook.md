@@ -9,6 +9,10 @@ Recommended split:
 
 Reason: Telegram webhooks and persistent server state are not a fit for static-only hosting.
 
+Oracle option:
+
+- For Oracle Cloud Infrastructure VM deployment and Render cutover, use `docs/oracle-oci-migration-runbook.md`.
+
 ## Environment strategy
 
 Use separate env sets:

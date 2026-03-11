@@ -277,6 +277,7 @@ Hilfsskripte:
 ## Produktion/Operations
 
 - Runbook: `docs/operations-runbook.md`
+- Oracle OCI Migration Runbook: `docs/oracle-oci-migration-runbook.md`
 - Import/Export Versionierung + Migration: `docs/import-export-versioning.md`
 - Backup-Drill-Protokoll: `docs/backup-drill-log.md`
 - Go-Live Checkliste + End-to-End Ablauf: `docs/go-live-checklist.md`
