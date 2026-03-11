@@ -8,6 +8,11 @@ Frontend (Netlify Live)
 - Required env in Netlify:
   - `VITE_API_BASE_URL=https://<production-api-domain>`
 
+API (Render)
+- Production blueprint: `deploy/production/render-api.yaml`
+- Persistent disk mount: `/opt/render/project/src/server/data`
+- Set all `sync: false` values in Render Dashboard (secrets).
+
 GitHub Actions live workflow
 - `.github/workflows/deploy-live.yml`
 - Configure repository secrets:
@@ -17,4 +22,3 @@ GitHub Actions live workflow
 
 Local runbook
 - `docs/netlify-live-runbook.md`
-

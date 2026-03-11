@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PORT = Number(process.env.TELEGRAM_MVP_PORT ?? 8787);
+const PORT = Number(process.env.PORT ?? process.env.TELEGRAM_MVP_PORT ?? 8787);
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? '';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? '';
 const HOST = process.env.TELEGRAM_MVP_HOST ?? '0.0.0.0';

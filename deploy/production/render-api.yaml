@@ -1,0 +1,71 @@
+services:
+  - type: web
+    name: promanager-api-production
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: node server/index.mjs
+    healthCheckPath: /api/health
+    disk:
+      name: promanager-data
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TELEGRAM_MVP_HOST
+        value: "0.0.0.0"
+      - key: LLM_ENABLED
+        value: "1"
+      - key: GOOGLE_ENABLED
+        value: "1"
+      - key: SECURITY_AUTH_ENABLED
+        value: "1"
+      - key: SECURITY_CORS_ORIGINS
+        value: "https://promanager-live-2026.netlify.app"
+      - key: SECURITY_RATE_LIMIT_ENABLED
+        value: "1"
+      - key: SECURITY_RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: SECURITY_RATE_LIMIT_MAX
+        value: "180"
+      - key: SECURITY_RATE_LIMIT_WEBHOOK_MAX
+        value: "300"
+      - key: BACKUP_ENABLED
+        value: "1"
+      - key: BACKUP_DAILY_ENABLED
+        value: "1"
+      - key: BACKUP_DAILY_HOUR_UTC
+        value: "2"
+      - key: BACKUP_RETENTION_DAYS
+        value: "45"
+      - key: AUTO_GOOGLE_SYNC_ON_TELEGRAM_IMPORT
+        value: "1"
+      - key: GOOGLE_DAILY_RESYNC_ENABLED
+        value: "1"
+      - key: GOOGLE_WEEKLY_HARD_RESYNC_ENABLED
+        value: "1"
+      - key: GOOGLE_WEEKLY_HARD_RESYNC_DAY_UTC
+        value: "0"
+      - key: GOOGLE_WEEKLY_HARD_RESYNC_HOUR_UTC
+        value: "3"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: SECURITY_OWNER_KEYS
+        sync: false
+      - key: SECURITY_DISPATCHER_KEYS
+        sync: false
+      - key: SECURITY_READONLY_KEYS
+        sync: false
+      - key: ALERT_WEBHOOK_URL
+        sync: false
